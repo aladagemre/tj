@@ -1,0 +1,18 @@
+# Maintainer: Emre Aladag <REPLACE-WITH-YOUR-EMAIL>
+pkgname=tj-tmux
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Jump between tmux sessions, most recently used first"
+arch=('any')
+url="https://github.com/aladagemre/tj"
+license=('MIT')
+depends=('bash' 'tmux' 'fzf')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/aladagemre/tj/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('f5470e6f2386a19ff0ff7e5c41bd193ed7a1774f78d2d1bcb726ea391a5dd443')
+
+package() {
+  cd "tj-$pkgver"
+  install -Dm755 tj "$pkgdir/usr/bin/tj"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
