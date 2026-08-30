@@ -28,7 +28,7 @@ Requires `tmux` and [`fzf`](https://github.com/junegunn/fzf).
 **Homebrew**
 
 ```sh
-brew install aladagemre/tj/tj
+brew install aladagemre/tap/tj
 ```
 
 **Manually** — it is one file, so this is enough:

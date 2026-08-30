@@ -2,7 +2,7 @@
 
 ## Homebrew
 
-The tap lives in [aladagemre/homebrew-tj](https://github.com/aladagemre/homebrew-tj).
+The tap lives in [aladagemre/homebrew-tap](https://github.com/aladagemre/homebrew-tap).
 On a new release, bump `url` and `sha256` in `Formula/tj.rb` there.
 
 ## AUR
