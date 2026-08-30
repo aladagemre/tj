@@ -11,15 +11,7 @@ you actually want is almost always one of the last few you touched. `tj` puts
 those on top, lets you fuzzy-filter them, and shows you each session's live
 screen so you can recognise it without attaching.
 
-```
-session > api
-  ● api-gateway      3m  2w  ~/code/api-gateway     │ api-gateway
-  ○ dotfiles        11m  1w  ~/.dotfiles            │   0: nvim *  (nvim)
-  · blog             1d  1w  ~/code/blog            │   1: server    (node)
-  · infra         14 Jun  3w  ~/code/infra          │ ─────────────────────
-                                                    │ $ npm run dev
-                                                    │ ready on :3000
-```
+![tj in action](assets/demo.gif)
 
 - `●` current session · `○` attached by another client · `·` detached
 - then: how long ago you last attached, window count, session directory

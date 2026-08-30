@@ -66,7 +66,7 @@ list_sessions() {
     else                                 mark=$'\033[38;5;240m·\033[0m'
     fi
     home_short="${path/#$HOME/\~}"
-    printf '%b %-22s \033[38;5;244m%6s  %sw  %s\033[0m\n' \
+    printf '%b %-18s \033[38;5;244m%6s  %sw  %s\033[0m\n' \
       "$mark" "$name" "$age" "$wins" "$home_short"
   done
 }
@@ -133,7 +133,7 @@ out=$(list_sessions | fzf \
   --prompt='session > ' \
   --header=$'enter switch · ctrl-x kill · ctrl-n new · ctrl-/ preview' \
   --preview="\"$self\" --preview {2}" \
-  --preview-window='right,55%,wrap,border-left' \
+  --preview-window='right,50%,wrap,border-left' \
   --bind='ctrl-/:toggle-preview' \
   --bind="ctrl-x:execute-silent(tmux kill-session -t {2})+reload(\"$self\" --list)")
 
