@@ -2,6 +2,10 @@
 
 **t**mux **j**ump — because you bind it to `prefix + j`.
 
+[![lint](https://github.com/aladagemre/tj/actions/workflows/lint.yml/badge.svg)](https://github.com/aladagemre/tj/actions/workflows/lint.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![no dependencies beyond tmux + fzf](https://img.shields.io/badge/deps-tmux%20%2B%20fzf-lightgrey)
+
 An interactive tmux session picker, sorted by **most recently used** — not
 alphabetically.
 
@@ -20,6 +24,14 @@ screen so you can recognise it without attaching.
 ## Install
 
 Requires `tmux` and [`fzf`](https://github.com/junegunn/fzf).
+
+**Homebrew**
+
+```sh
+brew install aladagemre/tj/tj
+```
+
+**Manually** — it is one file, so this is enough:
 
 ```sh
 git clone https://github.com/aladagemre/tj ~/.local/share/tj
@@ -64,11 +76,18 @@ after a kill) and for `--preview`.
 It is one self-contained bash script with no dependencies beyond `tmux` and
 `fzf`, and it works on both GNU and BSD/macOS userlands.
 
-## Prior art
+## How it compares
+
+tmux already ships with a session tree — `prefix + s` — and it is genuinely
+good: it previews sessions and it is always there. What `tj` adds is ordering
+by when you last attached, plus fuzzy filtering, which is what starts to matter
+somewhere north of a dozen sessions.
 
 [`sesh`](https://github.com/joshmedeski/sesh) is the fuller-featured take on
-this idea — it also starts sessions from directories, zoxide results and config
-files. `tj` is deliberately smaller: one file, one job, no config.
+this idea. Its own README leads with zoxide integration and per-project session
+configuration, so if you want session *management* — starting sessions from
+directories and config files — reach for that instead. `tj` is deliberately
+smaller: one file, one job, no config file, nothing to learn beyond three keys.
 
 ## License
 

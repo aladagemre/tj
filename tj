@@ -5,6 +5,7 @@
 #   tj <name>       jump straight to a session (fuzzy, first match wins)
 #   tj --list       print the formatted session list (used by fzf reload)
 #   tj --preview X  render the preview pane for session X (used by fzf)
+#   tj --version    print the version
 #
 # Keys inside the picker:
 #   enter    attach / switch to the highlighted session
@@ -14,6 +15,8 @@
 #   esc      quit
 
 set -uo pipefail
+
+VERSION=0.1.0
 
 # BSD readlink has no -f; fall back to resolving the symlink by hand.
 if self="$(readlink -f "$0" 2>/dev/null)"; then :; else
@@ -107,6 +110,7 @@ create_session() {
 case "${1:-}" in
   --list)    list_sessions; exit 0 ;;
   --preview) render_preview "${2:-}"; exit 0 ;;
+  -V|--version) echo "tj $VERSION"; exit 0 ;;
   -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$self"; exit 0 ;;
 esac
 
