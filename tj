@@ -87,6 +87,21 @@ human_age() {
   fi
 }
 
+# One list row. The host column exists only when hosts are configured, which is
+# what keeps today's output — and the name's field index — untouched for anyone
+# not using the feature. Colouring the host is safe: fzf strips ANSI both when
+# expanding {n} and when printing the selected line.
+emit_row() {
+  local mark=$1 host=$2 name=$3 age=$4 wins=$5 path=$6
+  if [[ -n $HOSTS ]]; then
+    printf '%b \033[38;5;110m%-8s\033[0m %-18s \033[38;5;244m%6s  %s  %s\033[0m\n' \
+      "$mark" "$host" "$name" "$age" "$wins" "$path"
+  else
+    printf '%b %-18s \033[38;5;244m%6s  %s  %s\033[0m\n' \
+      "$mark" "$name" "$age" "$wins" "$path"
+  fi
+}
+
 # Sessions, most recently attached first. Never-attached ones fall back to
 # their creation time so they still land somewhere sensible.
 list_sessions() {
@@ -103,8 +118,7 @@ list_sessions() {
     else                                 mark=$'\033[38;5;240m·\033[0m'
     fi
     home_short="${path/#$HOME/\~}"
-    printf '%b %-18s \033[38;5;244m%6s  %sw  %s\033[0m\n' \
-      "$mark" "$name" "$age" "$wins" "$home_short"
+    emit_row "$mark" local "$name" "$age" "${wins}w" "$home_short"
   done
 }
 

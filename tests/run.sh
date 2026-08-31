@@ -21,6 +21,12 @@ ok() { printf '  \033[32mok\033[0m    %s\n' "$1"; pass=$((pass + 1)); }
 no() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; printf '        %s\n' "$2"; fail=$((fail + 1)); }
 is() { if [[ $2 == "$3" ]]; then ok "$1"; else no "$1" "expected [$2] got [$3]"; fi; }
 
+# fzf strips ANSI before expanding {n} and before printing the selected line, so
+# every field index in tj is an index into the *stripped* row. Raw output splits
+# differently: `%6s` right-pads the age, so its colour escape lands in a field of
+# its own. Assert on what fzf actually hands back.
+plain() { sed "s/$(printf '\033')\[[0-9;]*m//g"; }
+
 # Every raw tmux call in the suite goes through here so the socket name is
 # checked before anything destructive runs.
 srv() {
@@ -95,6 +101,23 @@ is "no config means no hosts" \
 printf 'local\n' >"$cfgdir/tj/hosts"
 TJ_HOSTS= XDG_CONFIG_HOME="$cfgdir" "$TJ" --hosts >/dev/null 2>&1
 is "'local' is rejected as a host name" "1" "$?"
+
+echo "host column"
+loc=$(TJ_HOSTS= "$TJ" --list | plain)
+is "local-only rows have 5 fields" \
+   "0" \
+   "$(awk 'NF!=5{c++} END{print c+0}' <<<"$loc")"
+is "local-only puts the name in field 2" \
+   "alpha" \
+   "$(awk '$2=="alpha"{print $2}' <<<"$loc" | head -1)"
+
+rem=$(TJ_HOSTS=nowhere TJ_FAKE_SSH_DEAD=nowhere "$TJ" --list | plain)
+is "remote mode labels local rows 'local'" \
+   "2" \
+   "$(awk '$2=="local"{c++} END{print c+0}' <<<"$rem")"
+is "remote mode puts the name in field 3" \
+   "alpha" \
+   "$(awk '$2=="local" && $3=="alpha"{print $3}' <<<"$rem" | head -1)"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
