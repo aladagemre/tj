@@ -15,7 +15,7 @@
 - `shellcheck --shell=bash tj tj.tmux` must stay clean; CI runs exactly that.
 - macOS is a primary target. Any new coreutils usage needs a BSD fallback, following the existing `fmt_date` and `$self` patterns.
 - With no hosts configured, `./tj --list` output must be **byte-identical** to today's and **no `ssh` process may be spawned**.
-- The list line is a contract: field 1 is the status mark and is never an empty string. The session name lives in field 2 (local-only mode) or field 3 (remote mode); that index is a computed variable, never a hard-coded literal. **Field indices are indices into the ANSI-stripped row** — the raw row splits differently, because `%6s` right-pads the age and leaves its colour escape standing as a field of its own. Everything in production reads the name through fzf, which strips ANSI both when expanding `{n}` and when printing the selected line, so production sees the stripped row; tests must strip it themselves to assert on the same thing.
+- The list line is a contract: field 1 is the status mark and is never an empty string. The session name lives in field 2 (local-only mode) or field 3 (remote mode); that index is a computed variable, never a hard-coded literal. **Field indices are indices into the ANSI-stripped row** — the raw row splits differently, because `%6s` left-pads the age and leaves its colour escape standing as a field of its own. Everything in production reads the name through fzf, which strips ANSI both when expanding `{n}` and when printing the selected line, so production sees the stripped row; tests must strip it themselves to assert on the same thing.
 - **Test isolation is `-L <socket>` on every single tmux invocation.** `TMUX_TMPDIR` does not isolate: with a server already running, a client still finds the default socket. Nothing in this repo may run a destructive tmux command against the default server.
 - No new files under `tests/` may be executable-but-unreferenced; `tests/run.sh` is the only entry point.
 
@@ -329,7 +329,7 @@ First add this helper next to `is()` near the top of `tests/run.sh`:
 ```bash
 # fzf strips ANSI before expanding {n} and before printing the selected line, so
 # every field index in tj is an index into the *stripped* row. Raw output splits
-# differently: `%6s` right-pads the age, so its colour escape lands in a field of
+# differently: `%6s` left-pads the age, so its colour escape lands in a field of
 # its own. Assert on what fzf actually hands back.
 plain() { sed "s/$(printf '\033')\[[0-9;]*m//g"; }
 ```
@@ -1178,7 +1178,7 @@ awk's whitespace splitting would shift every field by one and the wrong session
 would be switched to or killed. fzf strips ANSI codes both when expanding `{n}`
 and when printing the selected line, so colours anywhere in the row are safe —
 but those field numbers count fields in the *stripped* row. The raw row splits
-differently: `%6s` right-pads the age, so its colour escape stands alone as a
+differently: `%6s` left-pads the age, so its colour escape stands alone as a
 field. Anything parsing `tj --list` directly (the test suite does) must strip
 ANSI first; `tests/run.sh` has a `plain()` helper for exactly that.
 ```
@@ -1229,8 +1229,10 @@ In `.github/workflows/lint.yml`, add a second job:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Install tmux and fzf
+        # The suite drives a live fzf UI, and tj refuses to run without fzf.
+        # GitHub's Ubuntu runner image ships neither.
+        run: sudo apt-get update && sudo apt-get install -y tmux fzf
       - name: Test
         run: tests/run.sh
 ```
