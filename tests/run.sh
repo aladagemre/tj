@@ -141,5 +141,23 @@ is "an unreachable host gets a visible row" \
    "1" \
    "$(awk '$2=="gone" && $3=="-"{c++} END{print c+0}' <<<"$dead")"
 
+echo "preview"
+srv "$LOCAL_SOCK"  send-keys -t alpha 'echo LOCALMARK' Enter
+srv "$REMOTE_SOCK" send-keys -t api   'echo REMOTEMARK' Enter
+sleep 1
+
+is "one argument previews a local session" \
+   "1" \
+   "$(TJ_HOSTS=prod "$TJ" --preview alpha | grep -c LOCALMARK)"
+is "'local' as host previews locally" \
+   "1" \
+   "$(TJ_HOSTS=prod "$TJ" --preview local alpha | grep -c LOCALMARK)"
+is "two arguments preview over ssh" \
+   "1" \
+   "$(TJ_HOSTS=prod "$TJ" --preview prod api | grep -c REMOTEMARK)"
+is "a placeholder name previews nothing" \
+   "" \
+   "$(TJ_HOSTS=prod "$TJ" --preview gone -)"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
