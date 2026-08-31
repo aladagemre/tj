@@ -68,13 +68,20 @@ set -u
 
 [[ -n ${TJ_SSH_LOG:-} ]] && printf '%s\n' "$*" >>"$TJ_SSH_LOG"
 
+# Real ssh takes its options BEFORE the host; everything after the host is the
+# remote command and is passed through untouched. Parsing options past the host
+# would eat flags belonging to that command — `tmux attach -t api` would lose
+# its `-t` and become invalid.
 host=""
 cmd=()
 while (( $# )); do
+  if [[ -n $host ]]; then
+    cmd+=("$1"); shift; continue
+  fi
   case $1 in
     -o|-l|-p|-i|-F|-b|-c|-E|-D|-L|-R) shift 2 ;;
     -*) shift ;;
-    *)  if [[ -z $host ]]; then host=$1; else cmd+=("$1"); fi; shift ;;
+    *)  host=$1; shift ;;
   esac
 done
 
@@ -804,6 +811,28 @@ function always exits 0 so the picker's reload never looks broken."
 **Interfaces:**
 - Consumes: `qq`.
 - Produces: `enter_remote <host> <name>` — inside tmux it replaces the client via `detach-client -E`; outside it `exec`s `ssh -t`.
+
+- [ ] **Step 0: Repair the ssh shim's argument parsing**
+
+`tests/fakebin/ssh` strips every `-*` token anywhere in argv, including flags
+that belong to the *remote command*. `ssh -t prod tmux attach -t api` therefore
+reaches the fake remote server as `tmux attach api`, which is invalid. Real ssh
+stops option parsing at the host. Replace the parsing loop in
+`tests/fakebin/ssh` with the corrected version shown in Task 1's Step 2 above
+(options before the host only; everything after the host is the command).
+
+Then add a regression guard next to the existing ssh-shim assertions in
+`tests/run.sh`, so the shim can never silently eat a command flag again:
+
+```bash
+is "the ssh shim passes flags after the host through untouched" \
+   "yes" \
+   "$(ssh -o StrictHostKeyChecking=no myhost tmux list-sessions -F '#{session_name}' | has '^api$')"
+```
+
+With the old parsing this fails: `-F` and its argument are swallowed as if they
+were ssh's own, so the remote command falls back to tmux's default format and
+never prints a bare `api`.
 
 - [ ] **Step 1: Write the failing test**
 
