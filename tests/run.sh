@@ -21,6 +21,11 @@ ok() { printf '  \033[32mok\033[0m    %s\n' "$1"; pass=$((pass + 1)); }
 no() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; printf '        %s\n' "$2"; fail=$((fail + 1)); }
 is() { if [[ $2 == "$3" ]]; then ok "$1"; else no "$1" "expected [$2] got [$3]"; fi; }
 
+# A pane holds the typed command, the shell's echo of it, and its output, so a
+# marker appears several times, not once. These assertions care whether the
+# preview reached the right machine — presence, never a count.
+has() { grep -q "$1" && echo yes || echo no; }
+
 # fzf strips ANSI before expanding {n} and before printing the selected line, so
 # every field index in tj is an index into the *stripped* row. Raw output splits
 # differently: `%6s` right-pads the age, so its colour escape lands in a field of
@@ -147,14 +152,17 @@ srv "$REMOTE_SOCK" send-keys -t api   'echo REMOTEMARK' Enter
 sleep 1
 
 is "one argument previews a local session" \
-   "1" \
-   "$(TJ_HOSTS=prod "$TJ" --preview alpha | grep -c LOCALMARK)"
+   "yes" \
+   "$(TJ_HOSTS=prod "$TJ" --preview alpha | has LOCALMARK)"
 is "'local' as host previews locally" \
-   "1" \
-   "$(TJ_HOSTS=prod "$TJ" --preview local alpha | grep -c LOCALMARK)"
+   "yes" \
+   "$(TJ_HOSTS=prod "$TJ" --preview local alpha | has LOCALMARK)"
 is "two arguments preview over ssh" \
-   "1" \
-   "$(TJ_HOSTS=prod "$TJ" --preview prod api | grep -c REMOTEMARK)"
+   "yes" \
+   "$(TJ_HOSTS=prod "$TJ" --preview prod api | has REMOTEMARK)"
+is "the remote preview shows the remote pane, not the local one" \
+   "no" \
+   "$(TJ_HOSTS=prod "$TJ" --preview prod api | has LOCALMARK)"
 is "a placeholder name previews nothing" \
    "" \
    "$(TJ_HOSTS=prod "$TJ" --preview gone -)"
