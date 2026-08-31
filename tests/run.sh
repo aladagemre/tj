@@ -124,11 +124,23 @@ is "ssh shim skips an -o pair and a bare flag ahead of the host" \
 # second command.
 : >"$TJ_SSH_LOG"
 rm -f /tmp/tj-injected
-( unset TMUX; TJ_HOSTS=prod "$TJ" prod 'a;touch /tmp/tj-injected' ) >/dev/null 2>&1
+( unset TMUX; TJ_HOSTS=prod "$TJ" 'prod:a;touch /tmp/tj-injected' ) >/dev/null 2>&1
 is "a metacharacter in a session name cannot become a second remote command" \
    "no" \
    "$([[ -e /tmp/tj-injected ]] && echo yes || echo no)"
 rm -f /tmp/tj-injected
+
+# Two words are NOT a remote target: `tj a b` is a fuzzy jump to `a`. The host
+# only ever arrives as `host:name`, which is what keeps "no hosts configured
+# means no ssh" true for every argument form.
+: >"$TJ_SSH_LOG"
+( unset TMUX; TJ_HOSTS=prod "$TJ" alpha bogus ) >/dev/null 2>&1
+is "a two-word argument runs no ssh" \
+   "0" \
+   "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
+is "a two-word argument creates no session named after the second word" \
+   "0" \
+   "$(srv "$LOCAL_SOCK" list-sessions -F '#{session_name}' | grep -c '^bogus$')"
 
 echo "host configuration"
 is "TJ_HOSTS splits on whitespace" \
@@ -260,7 +272,7 @@ is "a client is attached before the transition" \
    "$([[ -n $tty_before ]] && echo yes || echo no)"
 
 srv "$LOCAL_SOCK" send-keys -t home \
-  "TJ_HOSTS=prod TJ_TEST_SOCKET=$LOCAL_SOCK TJ_REAL_TMUX=$TJ_REAL_TMUX PATH=$ROOT/tests/fakebin:\$PATH TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK $TJ prod api" Enter
+  "TJ_HOSTS=prod TJ_TEST_SOCKET=$LOCAL_SOCK TJ_REAL_TMUX=$TJ_REAL_TMUX PATH=$ROOT/tests/fakebin:\$PATH TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK $TJ prod:api" Enter
 sleep 3
 
 is "the client left the local server" \

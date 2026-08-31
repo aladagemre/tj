@@ -271,25 +271,26 @@ case "${1:-}" in
   -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$self"; exit 0 ;;
 esac
 
+# `tj prod:api` — ':' cannot occur in a tmux session name (tmux rewrites it to
+# '_'), so a colon unambiguously means "remote". It is decided BEFORE the "no
+# local server" fallback below: connecting to a remote session from a bare
+# terminal with no local tmux running is exactly what this form is for, and the
+# fallback would otherwise create a *local* session named `prod_api`.
+if [[ ${1:-} == *:* ]]; then
+  enter_remote "${1%%:*}" "${1#*:}"
+  exit 0
+fi
+
 tmux has-session 2>/dev/null || {
   # Nothing running at all: just start something.
   create_session "${1:-main}"; exit $?
 }
 
-# `tj prod api` — used by the picker and by the host:name form below.
-if [[ -n ${2:-} ]]; then
-  enter_remote "$1" "$2"
-  exit 0
-fi
-
-# Direct jump: `tj api-gateway`
+# Direct jump: `tj api-gateway`. Only the first word is looked at, so `tj a b`
+# is a fuzzy jump to `a`. A host is never taken from a separate argument — it
+# always arrives as `host:name` — which is what keeps the promise that tj runs
+# no ssh at all when no hosts are configured.
 if [[ -n ${1:-} ]]; then
-  # `tj prod:api` — ':' cannot occur in a tmux session name (tmux rewrites it to
-  # '_'), so a colon unambiguously means "remote".
-  if [[ $1 == *:* ]]; then
-    enter_remote "${1%%:*}" "${1#*:}"
-    exit 0
-  fi
   match=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -i -- "$1" | head -1)
   [[ -n $match ]] && { enter_session "$match"; exit 0; }
   create_session "$1"; exit 0
