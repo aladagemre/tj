@@ -33,8 +33,8 @@ has() { grep -q "$1" && echo yes || echo no; }
 # to disappear (used after ctrl-x + reload). Bounded at ~4s so a genuine hang
 # still fails fast instead of stalling the suite.
 wait_for_pane() {
-  local sock=$1 target=$2 pattern=$3 mode=${4:-present} i
-  for i in $(seq 1 20); do
+  local sock=$1 target=$2 pattern=$3 mode=${4:-present}
+  for _ in $(seq 1 20); do
     if srv "$sock" capture-pane -p -t "$target" 2>/dev/null | grep -q -- "$pattern"; then
       [[ $mode == present ]] && return 0
     else
@@ -50,8 +50,8 @@ wait_for_pane() {
 # detaches), so it can still be in flight the instant `send-keys Enter`
 # returns. Poll for the pattern instead of guessing a sleep long enough.
 wait_for_log() {
-  local file=$1 pattern=$2 i
-  for i in $(seq 1 20); do
+  local file=$1 pattern=$2
+  for _ in $(seq 1 20); do
     grep -q -- "$pattern" "$file" 2>/dev/null && return 0
     sleep 0.2
   done
@@ -60,7 +60,7 @@ wait_for_log() {
 
 # fzf strips ANSI before expanding {n} and before printing the selected line, so
 # every field index in tj is an index into the *stripped* row. Raw output splits
-# differently: `%6s` right-pads the age, so its colour escape lands in a field of
+# differently: `%6s` left-pads the age, so its colour escape lands in a field of
 # its own. Assert on what fzf actually hands back.
 plain() { sed "s/$(printf '\033')\[[0-9;]*m//g"; }
 
@@ -75,9 +75,31 @@ srv() {
   "$TJ_REAL_TMUX" -L "$sock" "$@"
 }
 
+# kill-server leaves the socket FILE behind, and it lives in the same directory
+# as the user's real `default` socket. Check the name the way srv() does before
+# removing anything from there.
+rm_sock() {
+  case $1 in
+    tjtest-*) rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$1" ;;
+  esac
+}
+
+# Everything the suite creates is removed here, and nothing else is: the two
+# tmux servers and their socket files, the ssh log, the injection marker, and
+# the two throwaway XDG_CONFIG_HOME directories. cfgdir/emptycfg do not exist
+# yet if the suite dies early, hence the :- guards.
 cleanup() {
+  local d
   srv "$LOCAL_SOCK"  kill-server 2>/dev/null
   srv "$REMOTE_SOCK" kill-server 2>/dev/null
+  rm_sock "$LOCAL_SOCK"
+  rm_sock "$REMOTE_SOCK"
+  [[ -n ${TJ_SSH_LOG:-} ]] && rm -f "$TJ_SSH_LOG"
+  rm -f /tmp/tj-injected
+  for d in "${cfgdir:-}" "${emptycfg:-}"; do
+    [[ -n $d && -d $d ]] && rm -rf "${d:?}"
+  done
+  return 0
 }
 trap cleanup EXIT
 
@@ -154,9 +176,10 @@ is "config file drops comments and blanks" \
    "prod dev" \
    "$(TJ_HOSTS= XDG_CONFIG_HOME="$cfgdir" "$TJ" --hosts | tr '\n' ' ' | sed 's/ $//')"
 
+emptycfg=$(mktemp -d)
 is "no config means no hosts" \
    "" \
-   "$(TJ_HOSTS= XDG_CONFIG_HOME="$(mktemp -d)" "$TJ" --hosts)"
+   "$(TJ_HOSTS= XDG_CONFIG_HOME="$emptycfg" "$TJ" --hosts)"
 
 # Whitespace inside a config line used to be deleted, gluing `prod dev` into
 # one bogus host `proddev` that only showed up later as an unreachable row.

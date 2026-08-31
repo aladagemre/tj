@@ -200,19 +200,27 @@ remote_rows() {
 # so a host string can never influence a path.
 list_remote() {
   [[ -n $HOSTS ]] || return 0
-  local dir host i=0
-  dir=$(mktemp -d "${TMPDIR:-/tmp}/tj.XXXXXX") || return 0
-  while IFS= read -r host; do
-    i=$((i + 1))
-    remote_rows "$host" >"$dir/$i" 2>/dev/null &
-  done <<<"$HOSTS"
-  wait
-  i=0
-  while IFS= read -r _; do
-    i=$((i + 1))
-    [[ -f $dir/$i ]] && cat "$dir/$i"
-  done <<<"$HOSTS"
-  [[ -n $dir && -d $dir ]] && rm -rf "${dir:?}"
+  # The body runs in a subshell purely so the cleanup can be a trap that belongs
+  # to this function alone. list_remote is called inside `{ …; } | fzf`, so an
+  # fzf that quits before draining the pipe — or any interrupt — can end this
+  # shell wherever it happens to be; an `rm` on the last line would simply never
+  # run and leave the directory behind. Both guards stay: this repo never lets
+  # an `rm -rf` see an unguarded variable.
+  (
+    local dir host i=0
+    dir=$(mktemp -d "${TMPDIR:-/tmp}/tj.XXXXXX") || exit 0
+    trap '[[ -n ${dir:-} && -d ${dir:-} ]] && rm -rf "${dir:?}"' EXIT HUP INT TERM
+    while IFS= read -r host; do
+      i=$((i + 1))
+      remote_rows "$host" >"$dir/$i" 2>/dev/null &
+    done <<<"$HOSTS"
+    wait
+    i=0
+    while IFS= read -r _; do
+      i=$((i + 1))
+      [[ -f $dir/$i ]] && cat "$dir/$i"
+    done <<<"$HOSTS"
+  )
 }
 
 render_preview() {
