@@ -15,9 +15,13 @@ There is no build step, no test framework, and no dependencies beyond `tmux` and
 ## Commands
 
 ```sh
-shellcheck --shell=bash tj tj.tmux   # the only automated check; CI runs exactly this
-./tj --list                          # print the formatted session list (no UI)
-./tj --preview <session>             # render what the preview pane would show
+shellcheck --shell=bash tj tj.tmux     # style/lint check; CI runs this
+tests/run.sh                           # the 41-assertion suite; CI runs this too
+./tj --list                            # print the formatted session list (no UI)
+./tj --preview <session>               # render the preview pane, local
+./tj --preview <host> <name>           # ...for a session on a configured remote host
+./tj --kill [<host>] <name>            # kill a session (used by ctrl-x); host optional, local by default
+./tj --hosts                           # print the configured remote hosts, one per line
 ./tj --version
 ```
 
