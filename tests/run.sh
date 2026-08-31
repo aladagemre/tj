@@ -87,6 +87,10 @@ is "ssh shim skips an -o pair and a bare flag ahead of the host" \
    "1" \
    "$(grep -c '^api:' <<<"$out")"
 
+is "the ssh shim passes flags after the host through untouched" \
+   "yes" \
+   "$(ssh -o StrictHostKeyChecking=no myhost tmux list-sessions -F '#{session_name}' | has '^api$')"
+
 echo "host configuration"
 is "TJ_HOSTS splits on whitespace" \
    "prod dev" \
