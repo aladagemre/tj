@@ -282,6 +282,12 @@ fi
 
 # Direct jump: `tj api-gateway`
 if [[ -n ${1:-} ]]; then
+  # `tj prod:api` — ':' cannot occur in a tmux session name (tmux rewrites it to
+  # '_'), so a colon unambiguously means "remote".
+  if [[ $1 == *:* ]]; then
+    enter_remote "${1%%:*}" "${1#*:}"
+    exit 0
+  fi
   match=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -i -- "$1" | head -1)
   [[ -n $match ]] && { enter_session "$match"; exit 0; }
   create_session "$1"; exit 0
@@ -289,7 +295,15 @@ fi
 
 command -v fzf >/dev/null || die "fzf is not installed (sudo apt install fzf)"
 
-out=$(list_sessions | fzf \
+if [[ -n $HOSTS ]]; then
+  preview_cmd="\"$self\" --preview {2} {3}"
+  kill_cmd="\"$self\" --kill {2} {3}"
+else
+  preview_cmd="\"$self\" --preview {2}"
+  kill_cmd="\"$self\" --kill {2}"
+fi
+
+out=$( { list_sessions; list_remote; } | fzf \
   --ansi \
   --reverse \
   --no-sort \
@@ -297,10 +311,10 @@ out=$(list_sessions | fzf \
   --expect=ctrl-n \
   --prompt='session > ' \
   --header=$'enter switch · ctrl-x kill · ctrl-n new · ctrl-/ preview' \
-  --preview="\"$self\" --preview {2}" \
+  --preview="$preview_cmd" \
   --preview-window='right,50%,wrap,border-left' \
   --bind='ctrl-/:toggle-preview' \
-  --bind="ctrl-x:execute-silent(tmux kill-session -t {2})+reload(\"$self\" --list)")
+  --bind="ctrl-x:execute-silent($kill_cmd)+reload(\"$self\" --list)")
 
 query=$(sed -n 1p <<<"$out")
 key=$(sed -n 2p <<<"$out")
@@ -313,4 +327,13 @@ if [[ $key == ctrl-n ]]; then
 fi
 
 [[ -z $line ]] && exit 0
-enter_session "$(awk '{print $2}' <<<"$line")"
+sel_name=$(awk -v f="$NAMEF" '{print $f}' <<<"$line")
+[[ -z $sel_name || $sel_name == - ]] && exit 0
+if [[ -n $HOSTS ]]; then
+  sel_host=$(awk '{print $2}' <<<"$line")
+  if [[ $sel_host != local ]]; then
+    enter_remote "$sel_host" "$sel_name"
+    exit 0
+  fi
+fi
+enter_session "$sel_name"

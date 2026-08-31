@@ -250,5 +250,27 @@ srv "$REMOTE_SOCK" -f /dev/null new-session -d -s api -c /tmp -x 120 -y 30
 srv "$REMOTE_SOCK" send-keys -t api 'echo REMOTEMARK' Enter
 sleep 1
 
+echo "picker wiring"
+srv "$REMOTE_SOCK" -f /dev/null new-session -d -s solo -c /tmp -x 120 -y 30
+: >"$TJ_SSH_LOG"
+# unset TMUX: this asserts the outside-tmux path, and inheriting a real $TMUX
+# would silently exercise the detach-client branch instead.
+( unset TMUX; TJ_HOSTS=prod "$TJ" prod:solo ) >/dev/null 2>&1
+is "host:name asks ssh for that host and session" \
+   "1" \
+   "$(grep -c 'prod.*tmux attach -t solo' "$TJ_SSH_LOG")"
+
+# Feed the picker's own placeholders back through the entrypoints, which is what
+# fzf does with {2} and {3}.
+line=$(TJ_HOSTS=prod "$TJ" --list | plain | awk '$2=="prod" && $3=="api"' | head -1)
+is "remote-mode {2} {3} reach the remote pane" \
+   "yes" \
+   "$(TJ_HOSTS=prod "$TJ" --preview "$(awk '{print $2}' <<<"$line")" "$(awk '{print $3}' <<<"$line")" | has REMOTEMARK)"
+
+line=$(TJ_HOSTS= "$TJ" --list | plain | awk '$2=="alpha"' | head -1)
+is "local-mode {2} reaches the local pane" \
+   "yes" \
+   "$(TJ_HOSTS= "$TJ" --preview "$(awk '{print $2}' <<<"$line")" | has LOCALMARK)"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
