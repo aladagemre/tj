@@ -68,6 +68,10 @@ may be an `~/.ssh/config` alias, `user@host`, or a plain hostname.
 
 `TJ_HOSTS="prod dev"` (space separated) overrides the file entirely.
 
+`local` is reserved: it is the label the host column uses for this machine, so a
+host by that name would make the column ambiguous. tj exits with an error rather
+than guessing.
+
 **If neither is present, tj executes no SSH at all and behaves exactly as it does
 today.** This is the load-bearing property of the whole feature: remote support must
 be invisible until switched on.
