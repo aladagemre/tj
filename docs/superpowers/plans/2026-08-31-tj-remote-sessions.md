@@ -726,8 +726,14 @@ is "killing a local session works" \
    "0" \
    "$(srv "$LOCAL_SOCK" list-sessions -F '#{session_name}' | grep -c '^doomed$')"
 
+# The entrypoint ends in `exit 0` unconditionally, so asserting on the exit
+# status here would pass even with the placeholder guard deleted. What actually
+# distinguishes a no-op is that no connection was opened, so assert on that.
+: >"$TJ_SSH_LOG"
 TJ_HOSTS=prod "$TJ" --kill gone -
-is "killing a placeholder row is a silent no-op" "0" "$?"
+is "killing a placeholder row opens no connection" \
+   "0" \
+   "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -816,6 +822,12 @@ srv "$LOCAL_SOCK" set-environment -g TJ_FAKE_SSH_REMOTE_SOCKET "$REMOTE_SOCK"
 nohup script -qc "$TJ_REAL_TMUX -L $LOCAL_SOCK attach -t home" /dev/null >/dev/null 2>&1 &
 sleep 1
 tty_before=$(srv "$LOCAL_SOCK" list-clients -F '#{client_tty}' | head -1)
+# Without a real client there is nothing for detach-client to move, and every
+# assertion below would pass against an empty client list. Fail loudly here
+# instead of reporting three vacuous successes.
+is "a client is attached before the transition" \
+   "yes" \
+   "$([[ -n $tty_before ]] && echo yes || echo no)"
 
 srv "$LOCAL_SOCK" send-keys -t home \
   "TJ_HOSTS=prod TJ_TEST_SOCKET=$LOCAL_SOCK TJ_REAL_TMUX=$TJ_REAL_TMUX PATH=$ROOT/tests/fakebin:\$PATH TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK $TJ prod api" Enter
