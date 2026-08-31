@@ -15,7 +15,7 @@
 - `shellcheck --shell=bash tj tj.tmux` must stay clean; CI runs exactly that.
 - macOS is a primary target. Any new coreutils usage needs a BSD fallback, following the existing `fmt_date` and `$self` patterns.
 - With no hosts configured, `./tj --list` output must be **byte-identical** to today's and **no `ssh` process may be spawned**.
-- The list line is a contract: field 1 is the status mark and is never an empty string. The session name lives in field 2 (local-only mode) or field 3 (remote mode); that index is a computed variable, never a hard-coded literal.
+- The list line is a contract: field 1 is the status mark and is never an empty string. The session name lives in field 2 (local-only mode) or field 3 (remote mode); that index is a computed variable, never a hard-coded literal. **Field indices are indices into the ANSI-stripped row** — the raw row splits differently, because `%6s` right-pads the age and leaves its colour escape standing as a field of its own. Everything in production reads the name through fzf, which strips ANSI both when expanding `{n}` and when printing the selected line, so production sees the stripped row; tests must strip it themselves to assert on the same thing.
 - **Test isolation is `-L <socket>` on every single tmux invocation.** `TMUX_TMPDIR` does not isolate: with a server already running, a client still finds the default socket. Nothing in this repo may run a destructive tmux command against the default server.
 - No new files under `tests/` may be executable-but-unreferenced; `tests/run.sh` is the only entry point.
 
@@ -317,9 +317,21 @@ column uses for this machine."
 
 Append to `tests/run.sh`:
 
+First add this helper next to `is()` near the top of `tests/run.sh`:
+
+```bash
+# fzf strips ANSI before expanding {n} and before printing the selected line, so
+# every field index in tj is an index into the *stripped* row. Raw output splits
+# differently: `%6s` right-pads the age, so its colour escape lands in a field of
+# its own. Assert on what fzf actually hands back.
+plain() { sed "s/$(printf '\033')\[[0-9;]*m//g"; }
+```
+
+Then append the test block:
+
 ```bash
 echo "host column"
-loc=$(TJ_HOSTS= "$TJ" --list)
+loc=$(TJ_HOSTS= "$TJ" --list | plain)
 is "local-only rows have 5 fields" \
    "0" \
    "$(awk 'NF!=5{c++} END{print c+0}' <<<"$loc")"
@@ -327,7 +339,7 @@ is "local-only puts the name in field 2" \
    "alpha" \
    "$(awk '$2=="alpha"{print $2}' <<<"$loc" | head -1)"
 
-rem=$(TJ_HOSTS=nowhere TJ_FAKE_SSH_DEAD=nowhere "$TJ" --list)
+rem=$(TJ_HOSTS=nowhere TJ_FAKE_SSH_DEAD=nowhere "$TJ" --list | plain)
 is "remote mode labels local rows 'local'" \
    "2" \
    "$(awk '$2=="local"{c++} END{print c+0}' <<<"$rem")"
@@ -431,7 +443,7 @@ export TJ_SSH_LOG; TJ_SSH_LOG=$(mktemp)
 TJ_HOSTS= "$TJ" --list >/dev/null
 is "local-only mode spawns no ssh" "0" "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
 
-rows=$(TJ_HOSTS=prod "$TJ" --list)
+rows=$(TJ_HOSTS=prod "$TJ" --list | plain)
 is "remote sessions appear" \
    "1" \
    "$(awk '$2=="prod" && $3=="api"{c++} END{print c+0}' <<<"$rows")"
@@ -442,7 +454,7 @@ is "every remote-mode row has 6 fields or more" \
    "0" \
    "$(awk 'NF<6{c++} END{print c+0}' <<<"$rows")"
 
-dead=$(TJ_HOSTS=gone TJ_FAKE_SSH_DEAD=gone "$TJ" --list)
+dead=$(TJ_HOSTS=gone TJ_FAKE_SSH_DEAD=gone "$TJ" --list | plain)
 is "an unreachable host gets a visible row" \
    "1" \
    "$(awk '$2=="gone" && $3=="-"{c++} END{print c+0}' <<<"$dead")"
@@ -900,12 +912,12 @@ is "host:name asks ssh for that host and session" \
 
 # Feed the picker's own placeholders back through the entrypoints, which is what
 # fzf does with {2} and {3}.
-line=$(TJ_HOSTS=prod "$TJ" --list | awk '$2=="prod" && $3=="api"' | head -1)
+line=$(TJ_HOSTS=prod "$TJ" --list | plain | awk '$2=="prod" && $3=="api"' | head -1)
 is "remote-mode {2} {3} reach the remote pane" \
    "1" \
    "$(TJ_HOSTS=prod "$TJ" --preview "$(awk '{print $2}' <<<"$line")" "$(awk '{print $3}' <<<"$line")" | grep -c REMOTEMARK)"
 
-line=$(TJ_HOSTS= "$TJ" --list | awk '$2=="alpha"' | head -1)
+line=$(TJ_HOSTS= "$TJ" --list | plain | awk '$2=="alpha"' | head -1)
 is "local-mode {2} reaches the local pane" \
    "1" \
    "$(TJ_HOSTS= "$TJ" --preview "$(awk '{print $2}' <<<"$line")" | grep -c LOCALMARK)"
@@ -1081,7 +1093,11 @@ that index is computed once into `NAMEF` at startup; nothing may hard-code `{2}`
 or `$2`. The status mark in field 1 must never be an empty string — if it were,
 awk's whitespace splitting would shift every field by one and the wrong session
 would be switched to or killed. fzf strips ANSI codes both when expanding `{n}`
-and when printing the selected line, so colours anywhere in the row are safe.
+and when printing the selected line, so colours anywhere in the row are safe —
+but those field numbers count fields in the *stripped* row. The raw row splits
+differently: `%6s` right-pads the age, so its colour escape stands alone as a
+field. Anything parsing `tj --list` directly (the test suite does) must strip
+ANSI first; `tests/run.sh` has a `plain()` helper for exactly that.
 ```
 
 Then add to the same section:
