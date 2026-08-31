@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Test double for ssh: runs the command against a second throwaway tmux server
+# instead of reaching a host, so remote behaviour is exercised with no network.
+# A host listed in TJ_FAKE_SSH_DEAD exits 255, which is what real ssh returns
+# when it cannot connect at all.
+set -u
+
+[[ -n ${TJ_SSH_LOG:-} ]] && printf '%s\n' "$*" >>"$TJ_SSH_LOG"
+
+host=""
+cmd=()
+while (( $# )); do
+  case $1 in
+    -o|-l|-p|-i|-F|-b|-c|-E|-D|-L|-R) shift 2 ;;
+    -*) shift ;;
+    *)  if [[ -z $host ]]; then host=$1; else cmd+=("$1"); fi; shift ;;
+  esac
+done
+
+case " ${TJ_FAKE_SSH_DEAD:-} " in
+  *" $host "*) exit 255 ;;
+esac
+
+(( ${#cmd[@]} )) || exit 0
+# The command always begins with `tmux`, which resolves back to the fake tmux
+# above; pointing TJ_TEST_SOCKET at the remote server is what makes it "remote".
+exec env TJ_TEST_SOCKET="${TJ_FAKE_SSH_REMOTE_SOCKET:?}" bash -c "${cmd[*]}"
