@@ -222,12 +222,28 @@ create_session() {
   fi
 }
 
+# Killing lives behind an entrypoint rather than inline in the fzf binding, so
+# the local/remote decision sits in one place. Always exits 0: a failed kill
+# must not make the picker's reload look broken.
+kill_target() {
+  local host="" name
+  if (( $# >= 2 )); then host=$1; name=$2; else name=${1:-}; fi
+  [[ -z $name || $name == - ]] && return 0
+  if [[ -n $host && $host != local ]]; then
+    ssh_q "$host" "tmux kill-session -t $(qq "$name")" >/dev/null 2>&1
+  else
+    tmux kill-session -t "$name" >/dev/null 2>&1
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------- entrypoints
 
 case "${1:-}" in
   --hosts)   [[ -n $HOSTS ]] && printf '%s\n' "$HOSTS"; exit 0 ;;
   --list)    list_sessions; list_remote; exit 0 ;;
   --preview) shift; render_preview "$@"; exit 0 ;;
+  --kill)    shift; kill_target "$@"; exit 0 ;;
   -V|--version) echo "tj $VERSION"; exit 0 ;;
   -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$self"; exit 0 ;;
 esac

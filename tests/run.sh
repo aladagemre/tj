@@ -175,5 +175,25 @@ is "a placeholder name previews nothing" \
    "" \
    "$(TJ_HOSTS=prod "$TJ" --preview gone -)"
 
+echo "kill"
+srv "$LOCAL_SOCK"  -f /dev/null new-session -d -s doomed -c /tmp -x 120 -y 30
+srv "$REMOTE_SOCK" -f /dev/null new-session -d -s doomed -c /tmp -x 120 -y 30
+
+TJ_HOSTS=prod "$TJ" --kill prod doomed
+is "killing a remote session leaves the local one" \
+   "1" \
+   "$(srv "$LOCAL_SOCK" list-sessions -F '#{session_name}' | grep -c '^doomed$')"
+is "the remote session is gone" \
+   "0" \
+   "$(srv "$REMOTE_SOCK" list-sessions -F '#{session_name}' | grep -c '^doomed$')"
+
+TJ_HOSTS=prod "$TJ" --kill local doomed
+is "killing a local session works" \
+   "0" \
+   "$(srv "$LOCAL_SOCK" list-sessions -F '#{session_name}' | grep -c '^doomed$')"
+
+TJ_HOSTS=prod "$TJ" --kill gone -
+is "killing a placeholder row is a silent no-op" "0" "$?"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
