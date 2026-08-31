@@ -66,6 +66,22 @@ HOSTS=$(tj_hosts)
 # shellcheck disable=SC2034
 if [[ -n $HOSTS ]]; then NAMEF=3; else NAMEF=2; fi
 
+# Non-interactive ssh for listing and previewing: never prompt, never hang, and
+# hold one multiplexed connection open so the fzf preview — which re-runs on
+# every cursor move — does not pay for a fresh handshake each time. %C is a
+# fixed-length hash, which keeps the control socket inside the unix path limit.
+ssh_q() {
+  ssh -o BatchMode=yes \
+      -o ConnectTimeout=2 \
+      -o ControlMaster=auto \
+      -o ControlPersist=60 \
+      -o ControlPath="$HOME/.ssh/tj-%C" \
+      "$@"
+}
+
+# Quote one argument for the remote shell.
+qq() { printf '%q' "$1"; }
+
 # ---------------------------------------------------------------- formatting
 
 # GNU coreutils and BSD/macOS disagree on how to format a unix timestamp.
@@ -122,6 +138,51 @@ list_sessions() {
   done
 }
 
+# Sessions on one host. ssh exits 255 when it cannot reach the host at all,
+# which is the only failure worth a visible row: a reachable host with no
+# sessions should simply contribute nothing.
+remote_rows() {
+  local host=$1 out rc ts name wins att path age mark
+  out=$(ssh_q "$host" \
+    "tmux list-sessions -F '#{?session_last_attached,#{session_last_attached},#{session_created}}|#{session_name}|#{session_windows}|#{?session_attached,1,0}|#{session_path}'" \
+    2>/dev/null)
+  rc=$?
+  if (( rc == 255 )); then
+    emit_row $'\033[31m!\033[0m' "$host" - - - unreachable
+    return 0
+  fi
+  (( rc == 0 )) || return 0
+  printf '%s\n' "$out" | sort -t'|' -rn -k1,1 |
+  while IFS='|' read -r ts name wins att path; do
+    [[ -n $name ]] || continue
+    age=$(human_age "$ts")
+    if [[ $att == 1 ]]; then mark=$'\033[36m○\033[0m'
+    else                     mark=$'\033[38;5;240m·\033[0m'
+    fi
+    emit_row "$mark" "$host" "$name" "$age" "${wins}w" "$path"
+  done
+}
+
+# Every host is queried at once: one slow or dead host must not decide how long
+# the picker takes to open. Output files are named by loop index, never by host,
+# so a host string can never influence a path.
+list_remote() {
+  [[ -n $HOSTS ]] || return 0
+  local dir host i=0
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/tj.XXXXXX") || return 0
+  while IFS= read -r host; do
+    i=$((i + 1))
+    remote_rows "$host" >"$dir/$i" 2>/dev/null &
+  done <<<"$HOSTS"
+  wait
+  i=0
+  while IFS= read -r _; do
+    i=$((i + 1))
+    [[ -f $dir/$i ]] && cat "$dir/$i"
+  done <<<"$HOSTS"
+  [[ -n $dir && -d $dir ]] && rm -rf "${dir:?}"
+}
+
 render_preview() {
   local name=$1
   [[ -z $name ]] && return 0
@@ -157,7 +218,7 @@ create_session() {
 
 case "${1:-}" in
   --hosts)   [[ -n $HOSTS ]] && printf '%s\n' "$HOSTS"; exit 0 ;;
-  --list)    list_sessions; exit 0 ;;
+  --list)    list_sessions; list_remote; exit 0 ;;
   --preview) render_preview "${2:-}"; exit 0 ;;
   -V|--version) echo "tj $VERSION"; exit 0 ;;
   -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$self"; exit 0 ;;

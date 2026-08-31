@@ -119,5 +119,27 @@ is "remote mode puts the name in field 3" \
    "alpha" \
    "$(awk '$2=="local" && $3=="alpha"{print $3}' <<<"$rem" | head -1)"
 
+echo "remote listing"
+export TJ_SSH_LOG; TJ_SSH_LOG=$(mktemp)
+: >"$TJ_SSH_LOG"
+TJ_HOSTS= "$TJ" --list >/dev/null
+is "local-only mode spawns no ssh" "0" "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
+
+rows=$(TJ_HOSTS=prod "$TJ" --list | plain)
+is "remote sessions appear" \
+   "1" \
+   "$(awk '$2=="prod" && $3=="api"{c++} END{print c+0}' <<<"$rows")"
+is "remote rows come after local ones" \
+   "yes" \
+   "$(awk '$2=="local"{l=NR} $2=="prod"{r=NR} END{print (l<r)?"yes":"no"}' <<<"$rows")"
+is "every remote-mode row has 6 fields or more" \
+   "0" \
+   "$(awk 'NF<6{c++} END{print c+0}' <<<"$rows")"
+
+dead=$(TJ_HOSTS=gone TJ_FAKE_SSH_DEAD=gone "$TJ" --list | plain)
+is "an unreachable host gets a visible row" \
+   "1" \
+   "$(awk '$2=="gone" && $3=="-"{c++} END{print c+0}' <<<"$dead")"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
