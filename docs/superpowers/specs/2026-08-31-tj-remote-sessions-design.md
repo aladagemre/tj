@@ -25,8 +25,13 @@ remote tmux *inside* the local one (which forces a doubled prefix on every remot
 keystroke), tj hands the terminal over:
 
 ```bash
-tmux detach-client -E "ssh -t <host> tmux attach -t <name>; tmux attach -t <back>"
+tmux detach-client -E "ssh -t <host> <one qq-quoted remote command>; tmux attach -t <back>"
 ```
+
+The remote command is a single quoted string rather than bare words: ssh re-joins
+everything after the host with plain spaces before the remote shell sees it, so
+bare words would split a session name containing a space and execute one
+containing `;`.
 
 `man tmux`, `detach-client`: *"With -E, run shell-command to replace the client."*
 The local server keeps running with its sessions intact; only this client leaves.

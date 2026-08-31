@@ -821,18 +821,33 @@ stops option parsing at the host. Replace the parsing loop in
 `tests/fakebin/ssh` with the corrected version shown in Task 1's Step 2 above
 (options before the host only; everything after the host is the command).
 
-Then add a regression guard next to the existing ssh-shim assertions in
-`tests/run.sh`, so the shim can never silently eat a command flag again:
+Change nothing else in the shim. In particular it must keep joining the remote
+command the way real ssh does — a naive space concatenation with no escaping.
+A double that escapes better than the real thing hides quoting bugs instead of
+catching them.
+
+Then add this guard next to the existing ssh-shim assertions in `tests/run.sh`.
+It probes the risk that actually matters, in the form `tj` really emits: a
+session name carrying a shell metacharacter must cross the hop as data, never
+as a second command.
 
 ```bash
-is "the ssh shim passes flags after the host through untouched" \
-   "yes" \
-   "$(ssh -o StrictHostKeyChecking=no myhost tmux list-sessions -F '#{session_name}' | has '^api$')"
+: >"$TJ_SSH_LOG"
+rm -f /tmp/tj-injected
+( unset TMUX; TJ_HOSTS=prod "$TJ" prod 'a;touch /tmp/tj-injected' ) >/dev/null 2>&1
+is "a metacharacter in a session name cannot become a second remote command" \
+   "no" \
+   "$([[ -e /tmp/tj-injected ]] && echo yes || echo no)"
+rm -f /tmp/tj-injected
 ```
 
-With the old parsing this fails: `-F` and its argument are swallowed as if they
-were ssh's own, so the remote command falls back to tmux's default format and
-never prints a bare `api`.
+With a bare-words invocation this fails: the remote shell sees
+`tmux attach -t a;touch /tmp/tj-injected`, runs the `touch`, and the file
+appears. With the remote command sent as one quoted string, tmux receives the
+literal name `a;touch /tmp/tj-injected` and nothing else runs.
+
+This assertion depends on Step 4's two-argument acceptance, so run it after
+that step rather than before.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -901,12 +916,17 @@ In `tj`, after `enter_session`:
 # the session it came from.
 enter_remote() {
   local host=$1 name=$2 back
+  # ssh does not preserve argument boundaries: it re-joins everything after the
+  # host with plain spaces and hands the result to the remote shell. So the
+  # remote command must arrive as ONE already-quoted string, the way ssh_q
+  # sends its own. Bare words would let a session name containing a space split
+  # in two, and one containing `;` run as a second command on the remote host.
   if [[ -n ${TMUX:-} ]]; then
     back=$(tmux display-message -p '#S')
     tmux detach-client -E \
-      "ssh -t $(qq "$host") tmux attach -t $(qq "$name"); tmux attach -t $(qq "$back")"
+      "ssh -t $(qq "$host") $(qq "tmux attach -t $(qq "$name")"); tmux attach -t $(qq "$back")"
   else
-    exec ssh -t "$host" tmux attach -t "$name"
+    exec ssh -t "$host" "tmux attach -t $(qq "$name")"
   fi
 }
 ```
@@ -1173,9 +1193,12 @@ than merged into one MRU ordering, so a slow or dead host cannot delay the
 picker.
 
 **Entering a remote session replaces the client.** `enter_remote` uses
-`tmux detach-client -E "ssh -t <host> tmux attach -t <name>; tmux attach -t <back>"`
-so exactly one tmux is ever attached to the terminal. Nesting was rejected: it
-forces a doubled prefix on every remote keystroke.
+`tmux detach-client -E` to hand the terminal to the remote tmux, chaining a
+return to the session it left, so exactly one tmux is ever attached. Nesting was
+rejected: it forces a doubled prefix on every remote keystroke. The remote
+command is built as ONE `qq`-quoted string, like `ssh_q`'s, because ssh re-joins
+its arguments with plain spaces — bare words would split a session name
+containing a space and execute one containing `;`.
 ```
 
 Replace the **Testing changes** section's body with:
