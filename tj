@@ -32,6 +32,40 @@ die() { printf '%s\n' "$*" >&2; exit 1; }
 
 command -v tmux >/dev/null || die "tmux is not installed"
 
+# ---------------------------------------------------------------- remote hosts
+
+# Hosts to ask for sessions, one per line. TJ_HOSTS (space separated) wins over
+# the config file. With neither set tj runs no ssh at all, which is what keeps
+# the local-only path exactly as fast as it has always been.
+tj_hosts() {
+  local f line hosts=()
+  if [[ -n ${TJ_HOSTS:-} ]]; then
+    read -r -a hosts <<<"$TJ_HOSTS"
+  else
+    f="${XDG_CONFIG_HOME:-$HOME/.config}/tj/hosts"
+    [[ -r $f ]] || return 0
+    while IFS= read -r line || [[ -n $line ]]; do
+      line=${line%%#*}
+      line=${line//[[:space:]]/}
+      [[ -n $line ]] && hosts+=("$line")
+    done <"$f"
+  fi
+  (( ${#hosts[@]} )) || return 0
+  printf '%s\n' "${hosts[@]}"
+}
+
+HOSTS=$(tj_hosts)
+
+# "local" labels this machine in the host column, so it cannot also name a
+# remote host without making the column ambiguous.
+[[ $'\n'$HOSTS$'\n' == *$'\n'local$'\n'* ]] &&
+  die "'local' is a reserved host name — rename it in your tj hosts config"
+
+# The session name is field 2 normally and field 3 once a host column exists.
+# Everything that reads the name asks this variable instead of hard-coding it.
+# shellcheck disable=SC2034
+if [[ -n $HOSTS ]]; then NAMEF=3; else NAMEF=2; fi
+
 # ---------------------------------------------------------------- formatting
 
 # GNU coreutils and BSD/macOS disagree on how to format a unix timestamp.
@@ -108,6 +142,7 @@ create_session() {
 # ---------------------------------------------------------------- entrypoints
 
 case "${1:-}" in
+  --hosts)   [[ -n $HOSTS ]] && printf '%s\n' "$HOSTS"; exit 0 ;;
   --list)    list_sessions; exit 0 ;;
   --preview) render_preview "${2:-}"; exit 0 ;;
   -V|--version) echo "tj $VERSION"; exit 0 ;;

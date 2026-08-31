@@ -76,5 +76,25 @@ is "ssh shim skips an -o pair and a bare flag ahead of the host" \
    "1" \
    "$(grep -c '^api:' <<<"$out")"
 
+echo "host configuration"
+is "TJ_HOSTS splits on whitespace" \
+   "prod dev" \
+   "$(TJ_HOSTS='prod dev' "$TJ" --hosts | tr '\n' ' ' | sed 's/ $//')"
+
+cfgdir=$(mktemp -d)
+mkdir -p "$cfgdir/tj"
+printf '# a comment\nprod\n\n  dev  \n' >"$cfgdir/tj/hosts"
+is "config file drops comments and blanks" \
+   "prod dev" \
+   "$(TJ_HOSTS= XDG_CONFIG_HOME="$cfgdir" "$TJ" --hosts | tr '\n' ' ' | sed 's/ $//')"
+
+is "no config means no hosts" \
+   "" \
+   "$(TJ_HOSTS= XDG_CONFIG_HOME="$(mktemp -d)" "$TJ" --hosts)"
+
+printf 'local\n' >"$cfgdir/tj/hosts"
+TJ_HOSTS= XDG_CONFIG_HOME="$cfgdir" "$TJ" --hosts >/dev/null 2>&1
+is "'local' is rejected as a host name" "1" "$?"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
