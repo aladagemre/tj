@@ -193,7 +193,10 @@ is "killing a local session works" \
    "$(srv "$LOCAL_SOCK" list-sessions -F '#{session_name}' | grep -c '^doomed$')"
 
 TJ_HOSTS=prod "$TJ" --kill gone -
-is "killing a placeholder row is a silent no-op" "0" "$?"
+: >"$TJ_SSH_LOG"
+is "killing a placeholder row opens no connection" \
+   "0" \
+   "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
