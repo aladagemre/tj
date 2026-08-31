@@ -4,13 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`tj` is a tmux session picker: it lists sessions ordered by when you last attached,
-filters them through `fzf`, and previews each session's live pane. The whole tool is
-one bash script (`tj`, ~155 lines). `tj.tmux` is a separate 23-line entry point that
-only exists so the repo can be installed as a TPM (tmux plugin manager) plugin — it
-reads `@tj-key` / `@tj-width` / `@tj-height` and creates the key binding.
+`tj` is a tmux session picker: it lists tmux sessions — on this machine and, if you've
+configured any, on remote hosts over `ssh` — ordered by when you last attached, filters
+them through `fzf`, and previews each session's live pane. The whole tool is one bash
+script (`tj`, 341 lines). `tj.tmux` is a separate 23-line entry point that only exists
+so the repo can be installed as a TPM (tmux plugin manager) plugin — it reads
+`@tj-key` / `@tj-width` / `@tj-height` and creates the key binding.
 
-There is no build step, no test framework, and no dependencies beyond `tmux` and `fzf`.
+There is no build step, and no dependencies beyond `tmux` and `fzf` — plus `ssh`, but
+only if you configure remote hosts. There is a 41-assertion test suite
+(`tests/run.sh`); see Testing changes below.
 
 ## Commands
 
