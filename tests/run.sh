@@ -202,5 +202,46 @@ is "killing a placeholder row opens no connection" \
    "0" \
    "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
 
+echo "entering a remote session"
+srv "$LOCAL_SOCK" -f /dev/null new-session -d -s home -c /tmp -x 120 -y 30
+# detach-client -E runs its command from the tmux server's environment, not the
+# client's, so the shims have to be visible there too.
+srv "$LOCAL_SOCK" set-environment -g PATH "$ROOT/tests/fakebin:$PATH"
+srv "$LOCAL_SOCK" set-environment -g TJ_REAL_TMUX "$TJ_REAL_TMUX"
+srv "$LOCAL_SOCK" set-environment -g TJ_TEST_SOCKET "$LOCAL_SOCK"
+srv "$LOCAL_SOCK" set-environment -g TJ_FAKE_SSH_REMOTE_SOCKET "$REMOTE_SOCK"
+
+nohup script -qc "$TJ_REAL_TMUX -L $LOCAL_SOCK attach -t home" /dev/null >/dev/null 2>&1 &
+sleep 1
+tty_before=$(srv "$LOCAL_SOCK" list-clients -F '#{client_tty}' | head -1)
+# Without a real client there is nothing for detach-client to move, and every
+# assertion below would pass against an empty client list. Fail loudly here
+# instead of reporting three vacuous successes.
+is "a client is attached before the transition" \
+   "yes" \
+   "$([[ -n $tty_before ]] && echo yes || echo no)"
+
+srv "$LOCAL_SOCK" send-keys -t home \
+  "TJ_HOSTS=prod TJ_TEST_SOCKET=$LOCAL_SOCK TJ_REAL_TMUX=$TJ_REAL_TMUX PATH=$ROOT/tests/fakebin:\$PATH TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK $TJ prod api" Enter
+sleep 3
+
+is "the client left the local server" \
+   "0" \
+   "$(srv "$LOCAL_SOCK" list-clients -F '#{client_tty}' | grep -c "^$tty_before$")"
+is "the same terminal now drives the remote server" \
+   "1" \
+   "$(srv "$REMOTE_SOCK" list-clients -F '#{client_tty}' | grep -c "^$tty_before$")"
+
+srv "$REMOTE_SOCK" kill-session -t api
+sleep 2
+is "ending the remote session returns the terminal home" \
+   "1" \
+   "$(srv "$LOCAL_SOCK" list-clients -F '#{client_session}' | grep -c '^home$')"
+
+# T8 previews this session and greps for the marker, so restore it.
+srv "$REMOTE_SOCK" -f /dev/null new-session -d -s api -c /tmp -x 120 -y 30
+srv "$REMOTE_SOCK" send-keys -t api 'echo REMOTEMARK' Enter
+sleep 1
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))

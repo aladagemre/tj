@@ -212,6 +212,22 @@ enter_session() {
   fi
 }
 
+# Inside tmux, switch-client cannot cross machines. Rather than nesting a remote
+# tmux inside the local one — which costs a doubled prefix on every remote
+# keystroke — hand the terminal over. The chained second command is the return
+# ticket: when the remote session ends or ssh drops, the terminal falls back to
+# the session it came from.
+enter_remote() {
+  local host=$1 name=$2 back
+  if [[ -n ${TMUX:-} ]]; then
+    back=$(tmux display-message -p '#S')
+    tmux detach-client -E \
+      "ssh -t $(qq "$host") tmux attach -t $(qq "$name"); tmux attach -t $(qq "$back")"
+  else
+    exec ssh -t "$host" tmux attach -t "$name"
+  fi
+}
+
 create_session() {
   local name=$1
   tmux has-session -t "=$name" 2>/dev/null && { enter_session "$name"; return; }
@@ -252,6 +268,12 @@ tmux has-session 2>/dev/null || {
   # Nothing running at all: just start something.
   create_session "${1:-main}"; exit $?
 }
+
+# `tj prod api` — used by the picker and by the host:name form below.
+if [[ -n ${2:-} ]]; then
+  enter_remote "$1" "$2"
+  exit 0
+fi
 
 # Direct jump: `tj api-gateway`
 if [[ -n ${1:-} ]]; then
