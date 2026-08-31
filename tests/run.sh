@@ -27,6 +27,37 @@ is() { if [[ $2 == "$3" ]]; then ok "$1"; else no "$1" "expected [$2] got [$3]";
 # preview reached the right machine — presence, never a count.
 has() { grep -q "$1" && echo yes || echo no; }
 
+# Poll a live pane instead of a fixed sleep: fzf's startup and filtering time
+# vary with machine load, so a fixed sleep is either wasteful or flaky. Mode
+# "present" (default) waits for the pattern to appear, "absent" waits for it
+# to disappear (used after ctrl-x + reload). Bounded at ~4s so a genuine hang
+# still fails fast instead of stalling the suite.
+wait_for_pane() {
+  local sock=$1 target=$2 pattern=$3 mode=${4:-present} i
+  for i in $(seq 1 20); do
+    if srv "$sock" capture-pane -p -t "$target" 2>/dev/null | grep -q -- "$pattern"; then
+      [[ $mode == present ]] && return 0
+    else
+      [[ $mode == absent ]] && return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+# Same idea for a log file: enter_remote's detach-client -E branch schedules
+# its ssh call to run asynchronously (tmux runs it once the client actually
+# detaches), so it can still be in flight the instant `send-keys Enter`
+# returns. Poll for the pattern instead of guessing a sleep long enough.
+wait_for_log() {
+  local file=$1 pattern=$2 i
+  for i in $(seq 1 20); do
+    grep -q -- "$pattern" "$file" 2>/dev/null && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
 # fzf strips ANSI before expanding {n} and before printing the selected line, so
 # every field index in tj is an index into the *stripped* row. Raw output splits
 # differently: `%6s` right-pads the age, so its colour escape lands in a field of
@@ -271,6 +302,89 @@ line=$(TJ_HOSTS= "$TJ" --list | plain | awk '$2=="alpha"' | head -1)
 is "local-mode {2} reaches the local pane" \
    "yes" \
    "$(TJ_HOSTS= "$TJ" --preview "$(awk '{print $2}' <<<"$line")" | has LOCALMARK)"
+
+echo "picker wiring: live fzf"
+
+# Everything above drives entrypoints directly (--preview, --kill, the
+# host:name form); none of it presses a key inside the real fzf UI, so a
+# hard-coded {2}/$2 in the fzf command strings or the final selection's
+# `awk -v f="$NAMEF"` line would be invisible to the suite. Task 7 already
+# left a real client attached to LOCAL_SOCK's "home" session (see tty_before
+# above) -- reuse it instead of spawning a second `script` process.
+is "a client is still attached before the live-picker test" \
+   "1" \
+   "$(srv "$LOCAL_SOCK" list-clients -F '#{client_session}' | grep -c '^home$')"
+
+# detach-client -E (the enter_remote branch this exercises) and fzf's
+# execute-silent(...) (the kill_target branch below) both run from the tmux
+# SERVER's environment, not the shell that launched tj -- Task 7's comment
+# above explains why PATH/TJ_REAL_TMUX/TJ_TEST_SOCKET/TJ_FAKE_SSH_REMOTE_SOCKET
+# are seeded with set-environment -g; TJ_SSH_LOG needs the same treatment or
+# the assertion below would read an empty file no matter what tj does.
+srv "$LOCAL_SOCK" set-environment -g TJ_SSH_LOG "$TJ_SSH_LOG"
+
+launch_picker() {
+  srv "$LOCAL_SOCK" send-keys -t home \
+    "TJ_HOSTS=prod TJ_TEST_SOCKET=$LOCAL_SOCK TJ_REAL_TMUX=$TJ_REAL_TMUX PATH=$ROOT/tests/fakebin:\$PATH TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK TJ_SSH_LOG=$TJ_SSH_LOG $TJ" Enter
+}
+
+# `solo` (created above, in the "picker wiring" block) exists ONLY on the
+# remote server. A stale index that reads the host column ("prod") instead of
+# the name column ("solo") therefore cannot land on a session that happens to
+# exist under that wrong name too -- it can only fail visibly.
+: >"$TJ_SSH_LOG"
+launch_picker
+is "the live picker is running before entering a remote row" \
+   "yes" \
+   "$(wait_for_pane "$LOCAL_SOCK" home 'session >' && echo yes || echo no)"
+
+# `'` forces an exact substring match in fzf so this can't fuzzy-match some
+# other row by coincidence.
+srv "$LOCAL_SOCK" send-keys -t home "'solo"
+wait_for_pane "$LOCAL_SOCK" home 'prod.*solo' # filtered down to the one row
+srv "$LOCAL_SOCK" send-keys -t home Enter
+
+# detach-client -E's command runs once tmux actually finishes detaching the
+# client, which is not instantaneous -- wait for the ssh call to land instead
+# of racing it.
+wait_for_log "$TJ_SSH_LOG" 'tmux attach -t solo'
+is "enter on a live remote row asks ssh for that row's host and session" \
+   "1" \
+   "$(grep -c 'prod.*tmux attach -t solo' "$TJ_SSH_LOG")"
+
+# Killing the remote session is what sends the terminal home again -- the
+# same transition Task 7 already proved for the direct two-arg form -- which
+# gets a clean local client back for the kill test below.
+srv "$REMOTE_SOCK" kill-session -t solo
+is "the client returns home after a picker-driven remote enter" \
+   "1" \
+   "$(for _ in $(seq 1 20); do
+        c=$(srv "$LOCAL_SOCK" list-clients -F '#{client_session}' | grep -c '^home$')
+        [[ $c == 1 ]] && break
+        sleep 0.2
+      done; echo "$c")"
+
+# `api` exists under both hosts already (the collision fixture from the
+# preview tests above): a stale index that killed the wrong one would either
+# leave the remote session alive or take out the local one, and this pair of
+# assertions catches either.
+launch_picker
+is "the live picker is running before killing a remote row" \
+   "yes" \
+   "$(wait_for_pane "$LOCAL_SOCK" home 'session >' && echo yes || echo no)"
+
+srv "$LOCAL_SOCK" send-keys -t home "'prod"
+wait_for_pane "$LOCAL_SOCK" home 'prod.*api' # filtered down to the remote row
+srv "$LOCAL_SOCK" send-keys -t home C-x
+wait_for_pane "$LOCAL_SOCK" home 'prod.*api' absent # kill + reload landed
+srv "$LOCAL_SOCK" send-keys -t home Escape
+
+is "ctrl-x on a live remote row kills the remote session" \
+   "0" \
+   "$(srv "$REMOTE_SOCK" list-sessions -F '#{session_name}' 2>/dev/null | grep -c '^api$')"
+is "ctrl-x on a live remote row leaves the same-named local session" \
+   "1" \
+   "$(srv "$LOCAL_SOCK" list-sessions -F '#{session_name}' 2>/dev/null | grep -c '^api$')"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
