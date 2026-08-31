@@ -65,7 +65,7 @@ awk's whitespace splitting would shift every field by one and the wrong session
 would be switched to or killed. fzf strips ANSI codes both when expanding `{n}`
 and when printing the selected line, so colours anywhere in the row are safe —
 but those field numbers count fields in the *stripped* row. The raw row splits
-differently: `%6s` right-pads the age, so its colour escape stands alone as a
+differently: `%6s` left-pads the age, so its colour escape stands alone as a
 field. Anything parsing `tj --list` directly (the test suite does) must strip
 ANSI first; `tests/run.sh` has a `plain()` helper for exactly that.
 
