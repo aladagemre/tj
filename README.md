@@ -91,6 +91,33 @@ instead of switching, so the same command works from a fresh terminal.
 | ctrl-/ | toggle the preview pane                     |
 | esc    | quit                                        |
 
+## Remote sessions
+
+List and enter tmux sessions on other machines alongside your own. Put one host
+per line in `~/.config/tj/hosts`:
+
+```
+prod
+dev
+user@build.example.com
+```
+
+Entries are passed straight to `ssh`, so `~/.ssh/config` aliases work. `TJ_HOSTS="prod dev"` overrides the file.
+
+Remote sessions appear below your local ones with the host in its own column.
+Picking one hands your terminal to the remote tmux rather than nesting one tmux
+inside another, so your prefix key keeps working normally; detaching there
+(`prefix + d`) brings you back to the session you left.
+
+Two things worth knowing:
+
+- Listing uses `ssh -o BatchMode=yes`, so it needs key-based auth. A host that
+  would prompt for a password shows as unreachable. Entering a session uses a
+  normal `ssh -t`, so passwords and 2FA still work there.
+- `local` is reserved as the label for this machine and cannot name a host.
+
+With no hosts configured tj never runs `ssh` and behaves exactly as it always has.
+
 ## How it works
 
 Sessions are ordered by tmux's own `session_last_attached`, falling back to

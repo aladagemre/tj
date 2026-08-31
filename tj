@@ -3,8 +3,10 @@
 #
 #   tj              open the picker (attach from outside tmux, switch from inside)
 #   tj <name>       jump straight to a session (fuzzy, first match wins)
+#   tj <host>:<name> jump to a session on a remote host
 #   tj --list       print the formatted session list (used by fzf reload)
-#   tj --preview X  render the preview pane for session X (used by fzf)
+#   tj --preview [<host>] <name>  render the preview pane (used by fzf)
+#   tj --kill [<host>] <name>     kill a session (used by ctrl-x)
 #   tj --version    print the version
 #
 # Keys inside the picker:
@@ -16,7 +18,7 @@
 
 set -uo pipefail
 
-VERSION=0.1.0
+VERSION=0.2.0
 
 # BSD readlink has no -f; fall back to resolving the symlink by hand.
 if self="$(readlink -f "$0" 2>/dev/null)"; then :; else

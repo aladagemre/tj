@@ -25,21 +25,22 @@ shellcheck --shell=bash tj tj.tmux   # the only automated check; CI runs exactly
 
 Whoever runs this has real work in their own tmux sessions, and `tj` creates and
 kills sessions. Never exercise it against the default socket — always use an
-isolated server:
+isolated server.
 
-```sh
-tmux -L test -f /dev/null new-session -d -s demo -x 140 -y 32
-tmux -L test send-keys -t demo './tj' Enter        # drive the picker
-tmux -L test capture-pane -p -t demo               # read what it rendered
-tmux -L test kill-server && rm -f "/tmp/tmux-$(id -u)/test"
-```
+`tj` calls plain `tmux`, so the suite shadows `tmux` on `PATH` with
+`tests/fakebin/tmux`, which pins every call to a throwaway `-L` socket and
+refuses any socket not named `tjtest-*`. `tests/fakebin/ssh` redirects to a
+second throwaway server, so remote paths are exercised with no network.
 
-`-f /dev/null` also stops the isolated server from loading the user's own tmux config.
+**`TMUX_TMPDIR` is not isolation.** With a server already running, a client set
+to a different `TMUX_TMPDIR` still resolves to the default socket — a
+`kill-server` after such a "check" destroys the user's real sessions. `-L` on
+every invocation is the only isolation this repo trusts.
 
-To test `enter`/`ctrl-n`/`ctrl-x` end to end you need a real *client* attached to that
-server (`switch-client` fails with none), so background one with
-`nohup script -qc "tmux -L test attach -t demo" /dev/null &` and then assert with
-`tmux -L test list-clients -F '#{client_tty} => #{client_session}'`.
+Run the suite with `tests/run.sh`. To exercise `enter`/`ctrl-n`/`ctrl-x` end to
+end you need a real client attached (`switch-client` and `detach-client` fail
+with none), so background one with
+`nohup script -qc "tmux -L <sock> attach -t demo" /dev/null &`.
 
 ## Architecture
 
@@ -48,11 +49,18 @@ server (`switch-client` fails with none), so background one with
 via `$self`, resolved at the top with a `readlink -f` fallback for BSD.
 
 **The list line is a contract, not just formatting.** `list_sessions` prints
-`<mark> <name> <age> <windows> <path>`, and both the fzf preview (`{2}`) and the final
-`awk '{print $2}'` read the session name from field 2. The status mark in field 1 must
-therefore never be an empty string — if it were, awk's whitespace splitting would shift
-every field by one and the wrong session would be switched to or killed. fzf strips
-ANSI codes before expanding `{n}`, so the colours in the line are safe.
+`<mark> <name> <age> <windows> <path>`, and `list_remote` prints
+`<mark> <host> <name> <age> <windows> <path>` — the host column exists only when
+hosts are configured. The session name therefore sits in field 2 or field 3, and
+that index is computed once into `NAMEF` at startup; nothing may hard-code `{2}`
+or `$2`. The status mark in field 1 must never be an empty string — if it were,
+awk's whitespace splitting would shift every field by one and the wrong session
+would be switched to or killed. fzf strips ANSI codes both when expanding `{n}`
+and when printing the selected line, so colours anywhere in the row are safe —
+but those field numbers count fields in the *stripped* row. The raw row splits
+differently: `%6s` right-pads the age, so its colour escape stands alone as a
+field. Anything parsing `tj --list` directly (the test suite does) must strip
+ANSI first; `tests/run.sh` has a `plain()` helper for exactly that.
 
 **Ordering** comes from tmux itself: `session_last_attached`, falling back to
 `session_created` for sessions never attached, sorted descending. Nothing is cached.
@@ -60,6 +68,20 @@ ANSI codes before expanding `{n}`, so the colours in the line are safe.
 **Inside vs outside tmux** is the one behavioural fork: `enter_session` uses
 `switch-client` when `$TMUX` is set and `attach-session` otherwise, which is what lets
 the same command work from a popup and from a bare terminal.
+
+**Remote hosts are opt-in and the local path never pays for them.** With no
+`~/.config/tj/hosts` and no `TJ_HOSTS`, `HOSTS` is empty, `list_remote` returns
+immediately and no `ssh` runs. Remote rows are appended after local ones rather
+than merged into one MRU ordering, so a slow or dead host cannot delay the
+picker.
+
+**Entering a remote session replaces the client.** `enter_remote` uses
+`tmux detach-client -E` to hand the terminal to the remote tmux, chaining a
+return to the session it left, so exactly one tmux is ever attached. Nesting was
+rejected: it forces a doubled prefix on every remote keystroke. The remote
+command is built as ONE `qq`-quoted string, like `ssh_q`'s, because ssh re-joins
+its arguments with plain spaces — bare words would split a session name
+containing a space and execute one containing `;`.
 
 **Portability.** GNU and BSD/macOS disagree on `date -d @<ts>` vs `date -r <ts>` and on
 `readlink -f`; both have explicit fallbacks (`fmt_date`, the `$self` block). Keep any
