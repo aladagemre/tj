@@ -158,6 +158,12 @@ is "no config means no hosts" \
    "" \
    "$(TJ_HOSTS= XDG_CONFIG_HOME="$(mktemp -d)" "$TJ" --hosts)"
 
+# Whitespace inside a config line used to be deleted, gluing `prod dev` into
+# one bogus host `proddev` that only showed up later as an unreachable row.
+printf 'prod dev\n' >"$cfgdir/tj/hosts"
+TJ_HOSTS= XDG_CONFIG_HOME="$cfgdir" "$TJ" --hosts >/dev/null 2>&1
+is "two hosts on one config line are rejected, not glued together" "1" "$?"
+
 printf 'local\n' >"$cfgdir/tj/hosts"
 TJ_HOSTS= XDG_CONFIG_HOME="$cfgdir" "$TJ" --hosts >/dev/null 2>&1
 is "'local' is rejected as a host name" "1" "$?"
@@ -199,6 +205,20 @@ dead=$(TJ_HOSTS=gone TJ_FAKE_SSH_DEAD=gone "$TJ" --list | plain)
 is "an unreachable host gets a visible row" \
    "1" \
    "$(awk '$2=="gone" && $3=="-"{c++} END{print c+0}' <<<"$dead")"
+
+# tmux allows spaces in session names, and a remote host — not the user — picks
+# this one. Whitespace-split by fzf's {n} and by the final awk, `my project`
+# would be previewed, entered and KILLED as `my`, so the row has to arrive
+# inert instead.
+srv "$REMOTE_SOCK" -f /dev/null new-session -d -s 'my project' -c /tmp -x 120 -y 30
+spaced=$(TJ_HOSTS=prod "$TJ" --list | plain)
+is "a remote name containing whitespace becomes an inert '-' row" \
+   "1" \
+   "$(awk '$2=="prod" && $3=="-"{c++} END{print c+0}' <<<"$spaced")"
+is "no field of any row carries the first word of that name" \
+   "0" \
+   "$(awk '$3=="my" || $4=="project"{c++} END{print c+0}' <<<"$spaced")"
+srv "$REMOTE_SOCK" kill-session -t 'my project'
 
 echo "preview"
 srv "$LOCAL_SOCK"  send-keys -t alpha 'echo LOCALMARK' Enter

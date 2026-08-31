@@ -48,25 +48,39 @@ tj_hosts() {
     [[ -r $f ]] || return 0
     while IFS= read -r line || [[ -n $line ]]; do
       line=${line%%#*}
-      line=${line//[[:space:]]/}
-      [[ -n $line ]] && hosts+=("$line")
+      # Trim the ends only. Whitespace surviving in the middle would put a
+      # space in the host column and shift every field after it — but silently
+      # deleting it (which is what stripping every space used to do) turned
+      # `prod dev` on one line into one mystery host `proddev`, reported later
+      # as an unreachable row. Refuse the line instead of guessing.
+      line=${line#"${line%%[![:space:]]*}"}
+      line=${line%"${line##*[![:space:]]}"}
+      [[ -n $line ]] || continue
+      [[ $line == *[[:space:]]* ]] &&
+        die "one host per line: '$line' in $f has whitespace in it"
+      hosts+=("$line")
     done <"$f"
   fi
   (( ${#hosts[@]} )) || return 0
   printf '%s\n' "${hosts[@]}"
 }
 
-HOSTS=$(tj_hosts)
+# tj_hosts runs in a command substitution, so a `die` inside it only ends that
+# subshell: the message still reaches stderr, but the status has to be forwarded
+# here or a rejected config would read as a silent "no hosts configured".
+HOSTS=$(tj_hosts) || exit 1
 
 # "local" labels this machine in the host column, so it cannot also name a
 # remote host without making the column ambiguous.
 [[ $'\n'$HOSTS$'\n' == *$'\n'local$'\n'* ]] &&
   die "'local' is a reserved host name — rename it in your tj hosts config"
 
-# The session name is field 2 normally and field 3 once a host column exists.
-# Everything that reads the name asks this variable instead of hard-coding it.
-# shellcheck disable=SC2034
-if [[ -n $HOSTS ]]; then NAMEF=3; else NAMEF=2; fi
+# The session name is field 2 normally and field 3 once a host column exists,
+# and the host — when there is one at all — is always field 2. Everything that
+# reads either asks these variables instead of hard-coding an index: the fzf
+# preview command, the ctrl-x kill binding, and the final awk on the selected
+# line. Add a column and only this line changes.
+if [[ -n $HOSTS ]]; then HOSTF=2; NAMEF=3; else HOSTF=; NAMEF=2; fi
 
 # Non-interactive ssh for listing and previewing: never prompt, never hang, and
 # hold one multiplexed connection open so the fzf preview — which re-runs on
@@ -81,7 +95,13 @@ ssh_q() {
       "$@"
 }
 
-# Quote one argument for the remote shell.
+# Quote one argument for the remote shell. printf %q emits bash's $'…' form for
+# control characters, which a POSIX /bin/sh remote login shell would mis-parse.
+# That form is unreachable from the picker: the selected row is whitespace-split
+# before a name is handed on, and remote_rows drops any name with whitespace in
+# it outright, so no name carrying a control character can get this far. Keep
+# that invariant if you change the row contract — only then would this need a
+# POSIX-safe single-quote wrapper instead.
 qq() { printf '%q' "$1"; }
 
 # ---------------------------------------------------------------- formatting
@@ -158,6 +178,16 @@ remote_rows() {
   while IFS='|' read -r ts name wins att path; do
     [[ -n $name ]] || continue
     age=$(human_age "$ts")
+    # The row is whitespace-split by both fzf's {n} and the final awk, so a name
+    # containing any would shift every later field and get the WRONG session
+    # previewed, entered or killed. This branch widened who chooses that string
+    # from the user to any host they list, so such a row is emitted
+    # visible-but-inert instead — the same shape the unreachable row uses: a '!'
+    # mark and '-' where the name goes, which every consumer already ignores.
+    if [[ $name == *[[:space:]]* ]]; then
+      emit_row $'\033[31m!\033[0m' "$host" - "$age" "${wins}w" "skipped: name has whitespace"
+      continue
+    fi
     if [[ $att == 1 ]]; then mark=$'\033[36m○\033[0m'
     else                     mark=$'\033[38;5;240m·\033[0m'
     fi
@@ -298,12 +328,15 @@ fi
 
 command -v fzf >/dev/null || die "fzf is not installed (sudo apt install fzf)"
 
+# fzf's {n} counts fields in the ANSI-stripped row, the same row the final awk
+# reads, so both placeholders come from the computed indices above rather than
+# from literals that merely happen to agree with them today.
 if [[ -n $HOSTS ]]; then
-  preview_cmd="\"$self\" --preview {2} {3}"
-  kill_cmd="\"$self\" --kill {2} {3}"
+  preview_cmd="\"$self\" --preview {$HOSTF} {$NAMEF}"
+  kill_cmd="\"$self\" --kill {$HOSTF} {$NAMEF}"
 else
-  preview_cmd="\"$self\" --preview {2}"
-  kill_cmd="\"$self\" --kill {2}"
+  preview_cmd="\"$self\" --preview {$NAMEF}"
+  kill_cmd="\"$self\" --kill {$NAMEF}"
 fi
 
 out=$( { list_sessions; list_remote; } | fzf \
@@ -331,9 +364,13 @@ fi
 
 [[ -z $line ]] && exit 0
 sel_name=$(awk -v f="$NAMEF" '{print $f}' <<<"$line")
-[[ -z $sel_name || $sel_name == - ]] && exit 0
+[[ -z $sel_name ]] && exit 0
+# '-' is the name both inert rows carry: an unreachable host, and a remote
+# session whose name contains whitespace. Neither can be entered, and the spec
+# asks enter to fail with a message rather than attempt a connection.
+[[ $sel_name == - ]] && die "that row is a placeholder, not a session"
 if [[ -n $HOSTS ]]; then
-  sel_host=$(awk '{print $2}' <<<"$line")
+  sel_host=$(awk -v f="$HOSTF" '{print $f}' <<<"$line")
   if [[ $sel_host != local ]]; then
     enter_remote "$sel_host" "$sel_name"
     exit 0
