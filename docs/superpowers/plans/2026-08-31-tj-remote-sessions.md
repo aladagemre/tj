@@ -605,6 +605,14 @@ Then append the test block:
 echo "preview"
 srv "$LOCAL_SOCK"  send-keys -t alpha 'echo LOCALMARK' Enter
 srv "$REMOTE_SOCK" send-keys -t api   'echo REMOTEMARK' Enter
+
+# A local session deliberately COLLIDING by name with the remote one. Without
+# it the negative assertion below proves nothing: a remote branch that wrongly
+# fell through to local would look for `api` on the local socket, find nothing,
+# print nothing, and satisfy "no LOCALMARK" vacuously. With the collision, that
+# same bug renders the local pane and the assertion catches it.
+srv "$LOCAL_SOCK" -f /dev/null new-session -d -s api -c /tmp -x 120 -y 30
+srv "$LOCAL_SOCK" send-keys -t api 'echo LOCALMARK' Enter
 sleep 1
 
 is "one argument previews a local session" \
