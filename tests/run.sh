@@ -383,20 +383,37 @@ launch_picker() {
     "TJ_HOSTS=prod TJ_TEST_SOCKET=$LOCAL_SOCK TJ_REAL_TMUX=$TJ_REAL_TMUX PATH=$ROOT/tests/fakebin:\$PATH TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK TJ_SSH_LOG=$TJ_SSH_LOG $TJ" Enter
 }
 
+# fzf applies a query asynchronously: the keystrokes are in the pty long before
+# the list has been re-filtered, so an enter or ctrl-x sent too early acts on
+# the UNFILTERED selection -- the first row, not the one the query picks.
+# Waiting for a row the query KEEPS proves nothing, because that row is already
+# on screen before any filtering happens; both waits below are for things only
+# the finished query can produce: the whole query echoed back in the prompt, and
+# a row the query excludes gone from the list.
+filtered() { # <typed query> <regex matching a row the query removes>
+  wait_for_pane "$LOCAL_SOCK" home "session > $1" &&
+    wait_for_pane "$LOCAL_SOCK" home "$2" absent
+}
+
 # `solo` (created above, in the "picker wiring" block) exists ONLY on the
 # remote server. A stale index that reads the host column ("prod") instead of
 # the name column ("solo") therefore cannot land on a session that happens to
 # exist under that wrong name too -- it can only fail visibly.
 : >"$TJ_SSH_LOG"
 launch_picker
-is "the live picker is running before entering a remote row" \
+# Wait for the unfiltered list, not merely the prompt: `filtered` below decides
+# it is done when a row has DISAPPEARED, and a row that was never drawn in the
+# first place would satisfy that on the first poll.
+is "the live picker has drawn its list before entering a remote row" \
    "yes" \
-   "$(wait_for_pane "$LOCAL_SOCK" home 'session >' && echo yes || echo no)"
+   "$(wait_for_pane "$LOCAL_SOCK" home 'local.*beta' && echo yes || echo no)"
 
 # `'` forces an exact substring match in fzf so this can't fuzzy-match some
 # other row by coincidence.
 srv "$LOCAL_SOCK" send-keys -t home "'solo"
-wait_for_pane "$LOCAL_SOCK" home 'prod.*solo' # filtered down to the one row
+is "the 'solo query is applied before enter is sent" \
+   "yes" \
+   "$(filtered "'solo" 'local.*beta' && echo yes || echo no)"
 srv "$LOCAL_SOCK" send-keys -t home Enter
 
 # detach-client -E's command runs once tmux actually finishes detaching the
@@ -424,14 +441,18 @@ is "the client returns home after a picker-driven remote enter" \
 # leave the remote session alive or take out the local one, and this pair of
 # assertions catches either.
 launch_picker
-is "the live picker is running before killing a remote row" \
+is "the live picker has drawn its list before killing a remote row" \
    "yes" \
-   "$(wait_for_pane "$LOCAL_SOCK" home 'session >' && echo yes || echo no)"
+   "$(wait_for_pane "$LOCAL_SOCK" home 'local.*alpha' && echo yes || echo no)"
 
 srv "$LOCAL_SOCK" send-keys -t home "'prod"
-wait_for_pane "$LOCAL_SOCK" home 'prod.*api' # filtered down to the remote row
+is "the 'prod query is applied before ctrl-x is sent" \
+   "yes" \
+   "$(filtered "'prod" 'local.*alpha' && echo yes || echo no)"
 srv "$LOCAL_SOCK" send-keys -t home C-x
-wait_for_pane "$LOCAL_SOCK" home 'prod.*api' absent # kill + reload landed
+is "ctrl-x's kill and reload land" \
+   "yes" \
+   "$(wait_for_pane "$LOCAL_SOCK" home 'prod.*api' absent && echo yes || echo no)"
 srv "$LOCAL_SOCK" send-keys -t home Escape
 
 is "ctrl-x on a live remote row kills the remote session" \
