@@ -74,9 +74,10 @@ Reload with `tmux source-file ~/.tmux.conf`.
 ## Usage
 
 ```
-tj              open the picker
-tj <name>       jump straight to a session (fuzzy; creates it if there's no match)
-tj --help       key reference
+tj                open the picker
+tj <name>         jump straight to a session (fuzzy; creates it if there's no match)
+tj <host>:<name>  jump straight to a session on a remote host
+tj --help         key reference
 ```
 
 Inside tmux, `prefix + j` opens the picker in a popup. Outside tmux it attaches
@@ -109,12 +110,17 @@ Picking one hands your terminal to the remote tmux rather than nesting one tmux
 inside another, so your prefix key keeps working normally; detaching there
 (`prefix + d`) brings you back to the session you left.
 
-Two things worth knowing:
+A few things worth knowing:
 
 - Listing uses `ssh -o BatchMode=yes`, so it needs key-based auth. A host that
   would prompt for a password shows as unreachable. Entering a session uses a
   normal `ssh -t`, so passwords and 2FA still work there.
-- `local` is reserved as the label for this machine and cannot name a host.
+- `local` is reserved as the label for this machine and cannot name a host, and
+  a host goes on a line of its own — a line with a space in it is an error, not
+  two hosts.
+- A remote session whose name contains a space is listed but not selectable. The
+  list is a whitespace-separated table, so picking such a row would act on the
+  wrong session.
 
 With no hosts configured tj never runs `ssh` and behaves exactly as it always has.
 

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # tj — jump between tmux sessions, most recently used first.
 #
-#   tj              open the picker (attach from outside tmux, switch from inside)
-#   tj <name>       jump straight to a session (fuzzy, first match wins)
-#   tj <host>:<name> jump to a session on a remote host
-#   tj --list       print the formatted session list (used by fzf reload)
+#   tj                            open the picker (attach from outside tmux, switch from inside)
+#   tj <name>                     jump straight to a session (fuzzy, first match wins)
+#   tj <host>:<name>              jump to a session on a remote host
+#   tj --list                     print the formatted session list (used by fzf reload)
 #   tj --preview [<host>] <name>  render the preview pane (used by fzf)
 #   tj --kill [<host>] <name>     kill a session (used by ctrl-x)
-#   tj --version    print the version
+#   tj --hosts                    print the configured remote hosts, one per line
+#   tj --version                  print the version
 #
 # Keys inside the picker:
 #   enter    attach / switch to the highlighted session
@@ -188,8 +189,11 @@ remote_rows() {
       emit_row $'\033[31m!\033[0m' "$host" - "$age" "${wins}w" "skipped: name has whitespace"
       continue
     fi
+    # Both remote marks are drawn in their own colours, not the local
+    # ●/○/· palette, so the two groups stay tellable apart at a glance even
+    # when the host column has scrolled out of view.
     if [[ $att == 1 ]]; then mark=$'\033[36m○\033[0m'
-    else                     mark=$'\033[38;5;240m·\033[0m'
+    else                     mark=$'\033[38;5;66m·\033[0m'
     fi
     emit_row "$mark" "$host" "$name" "$age" "${wins}w" "$path"
   done

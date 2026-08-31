@@ -7,19 +7,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `tj` is a tmux session picker: it lists tmux sessions — on this machine and, if you've
 configured any, on remote hosts over `ssh` — ordered by when you last attached, filters
 them through `fzf`, and previews each session's live pane. The whole tool is one bash
-script (`tj`, 341 lines). `tj.tmux` is a separate 23-line entry point that only exists
+script (`tj`, 391 lines). `tj.tmux` is a separate 23-line entry point that only exists
 so the repo can be installed as a TPM (tmux plugin manager) plugin — it reads
 `@tj-key` / `@tj-width` / `@tj-height` and creates the key binding.
 
 There is no build step, and no dependencies beyond `tmux` and `fzf` — plus `ssh`, but
-only if you configure remote hosts. There is a 41-assertion test suite
+only if you configure remote hosts. There is a 49-assertion test suite
 (`tests/run.sh`); see Testing changes below.
 
 ## Commands
 
 ```sh
 shellcheck --shell=bash tj tj.tmux     # style/lint check; CI runs this
-tests/run.sh                           # the 41-assertion suite; CI runs this too
+tests/run.sh                           # the 49-assertion suite; CI runs this too
 ./tj --list                            # print the formatted session list (no UI)
 ./tj --preview <session>               # render the preview pane, local
 ./tj --preview <host> <name>           # ...for a session on a configured remote host
@@ -58,9 +58,11 @@ via `$self`, resolved at the top with a `readlink -f` fallback for BSD.
 **The list line is a contract, not just formatting.** `list_sessions` prints
 `<mark> <name> <age> <windows> <path>`, and `list_remote` prints
 `<mark> <host> <name> <age> <windows> <path>` — the host column exists only when
-hosts are configured. The session name therefore sits in field 2 or field 3, and
-that index is computed once into `NAMEF` at startup; nothing may hard-code `{2}`
-or `$2`. The status mark in field 1 must never be an empty string — if it were,
+hosts are configured. The session name therefore sits in field 2 or field 3 and
+the host, when there is one, in field 2; both indices are computed once into
+`NAMEF`/`HOSTF` at startup, and the fzf `--preview` string, the `ctrl-x` binding
+and the final `awk` all read them — nothing may hard-code `{2}` or `$2`.
+The status mark in field 1 must never be an empty string — if it were,
 awk's whitespace splitting would shift every field by one and the wrong session
 would be switched to or killed. fzf strips ANSI codes both when expanding `{n}`
 and when printing the selected line, so colours anywhere in the row are safe —
@@ -68,6 +70,16 @@ but those field numbers count fields in the *stripped* row. The raw row splits
 differently: `%6s` left-pads the age, so its colour escape stands alone as a
 field. Anything parsing `tj --list` directly (the test suite does) must strip
 ANSI first; `tests/run.sh` has a `plain()` helper for exactly that.
+
+**A row that cannot honour the contract is emitted inert, not dropped.** An
+unreachable host, and a remote session whose name contains whitespace, both come
+out with a `!` mark and `-` where the name goes; `render_preview`, `kill_target`
+and the final selection all treat `-` as "not a session". `list_sessions` is
+deliberately *not* given the same treatment: a local session with a space in its
+name has always broken field 2, and hiding a user's own session is worse than
+mis-targeting one they can see. For the same reason a config line with
+whitespace left in it (`prod dev`) is a fatal error rather than being glued into
+one host — a host string must never be able to widen the row.
 
 **Ordering** comes from tmux itself: `session_last_attached`, falling back to
 `session_created` for sessions never attached, sorted descending. Nothing is cached.
