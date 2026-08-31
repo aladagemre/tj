@@ -27,17 +27,7 @@ esac
 (( ${#cmd[@]} )) || exit 0
 # The command always begins with `tmux`, which resolves back to the fake tmux
 # above; pointing TJ_TEST_SOCKET at the remote server is what makes it "remote".
-# ssh_q callers hand the whole remote command over as ONE already-composed
-# string (its own embedded quoting intact), so cmd has exactly one element and
-# must be re-split by the shell as-is. A caller that instead lists the remote
-# command as separate words (the way `ssh -t host tmux attach -t name` reads
-# on a real command line) leaves cmd with one element per word; %q-quoting
-# each of those before rejoining is what makes them survive the shell's
-# second parse untouched, so a tmux format's leading '#' is not read back as
-# a comment.
-if (( ${#cmd[@]} > 1 )); then
-  printf -v remote_cmd '%q ' "${cmd[@]}"
-else
-  remote_cmd=${cmd[0]}
-fi
-exec env TJ_TEST_SOCKET="${TJ_FAKE_SSH_REMOTE_SOCKET:?}" bash -c "$remote_cmd"
+# Real ssh does no escaping when it re-joins argv into the remote command: a
+# double that escapes better than that would hide quoting bugs instead of
+# catching them, so this stays a bare space-join on purpose.
+exec env TJ_TEST_SOCKET="${TJ_FAKE_SSH_REMOTE_SOCKET:?}" bash -c "${cmd[*]}"

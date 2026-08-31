@@ -219,12 +219,17 @@ enter_session() {
 # the session it came from.
 enter_remote() {
   local host=$1 name=$2 back
+  # ssh does not preserve argument boundaries: it re-joins everything after the
+  # host with plain spaces and hands the result to the remote shell. So the
+  # remote command must arrive as ONE already-quoted string, the way ssh_q
+  # sends its own. Bare words would let a session name containing a space split
+  # in two, and one containing `;` run as a second command on the remote host.
   if [[ -n ${TMUX:-} ]]; then
     back=$(tmux display-message -p '#S')
     tmux detach-client -E \
-      "ssh -t $(qq "$host") tmux attach -t $(qq "$name"); tmux attach -t $(qq "$back")"
+      "ssh -t $(qq "$host") $(qq "tmux attach -t $(qq "$name")"); tmux attach -t $(qq "$back")"
   else
-    exec ssh -t "$host" tmux attach -t "$name"
+    exec ssh -t "$host" "tmux attach -t $(qq "$name")"
   fi
 }
 

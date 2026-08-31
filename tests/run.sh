@@ -14,6 +14,7 @@ export PATH="$ROOT/tests/fakebin:$PATH"
 LOCAL_SOCK=tjtest-local-$$
 REMOTE_SOCK=tjtest-remote-$$
 export TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK
+export TJ_SSH_LOG; TJ_SSH_LOG=$(mktemp)
 
 pass=0
 fail=0
@@ -87,9 +88,16 @@ is "ssh shim skips an -o pair and a bare flag ahead of the host" \
    "1" \
    "$(grep -c '^api:' <<<"$out")"
 
-is "the ssh shim passes flags after the host through untouched" \
-   "yes" \
-   "$(ssh -o StrictHostKeyChecking=no myhost tmux list-sessions -F '#{session_name}' | has '^api$')"
+# The risk that actually matters, in the form tj really emits: a session name
+# carrying a shell metacharacter must cross the ssh hop as data, never as a
+# second command.
+: >"$TJ_SSH_LOG"
+rm -f /tmp/tj-injected
+( unset TMUX; TJ_HOSTS=prod "$TJ" prod 'a;touch /tmp/tj-injected' ) >/dev/null 2>&1
+is "a metacharacter in a session name cannot become a second remote command" \
+   "no" \
+   "$([[ -e /tmp/tj-injected ]] && echo yes || echo no)"
+rm -f /tmp/tj-injected
 
 echo "host configuration"
 is "TJ_HOSTS splits on whitespace" \
@@ -129,7 +137,6 @@ is "remote mode puts the name in field 3" \
    "$(awk '$2=="local" && $3=="alpha"{print $3}' <<<"$rem" | head -1)"
 
 echo "remote listing"
-export TJ_SSH_LOG; TJ_SSH_LOG=$(mktemp)
 : >"$TJ_SSH_LOG"
 TJ_HOSTS= "$TJ" --list >/dev/null
 is "local-only mode spawns no ssh" "0" "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
