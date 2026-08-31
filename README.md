@@ -25,20 +25,45 @@ screen so you can recognise it without attaching.
 
 Requires `tmux` and [`fzf`](https://github.com/junegunn/fzf).
 
-**Homebrew**
+**With TPM** — the tmux plugin manager. This is the shortest path: it installs
+the script *and* sets up the key binding.
+
+```tmux
+set -g @plugin 'aladagemre/tj'
+```
+
+Then `prefix + I` to install, and `prefix + j` opens the picker. To use a
+different key or popup size:
+
+```tmux
+set -g @tj-key 'j'
+set -g @tj-width '80%'
+set -g @tj-height '75%'
+```
+
+**Just the file** — Linux, macOS, anything with bash. `tj` is a single script,
+so downloading it *is* the install:
+
+```sh
+mkdir -p ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/aladagemre/tj/main/tj -o ~/.local/bin/tj
+chmod +x ~/.local/bin/tj
+```
+
+(No `curl … | bash` here on purpose — this way the file lands on disk where you
+can read it before you run it.)
+
+**Homebrew** — works on macOS and Linux:
 
 ```sh
 brew install aladagemre/tap/tj
 ```
 
-**Manually** — it is one file, so this is enough:
+**Arch Linux** — a `PKGBUILD` is in [`packaging/`](packaging), not yet on the AUR.
 
-```sh
-git clone https://github.com/aladagemre/tj ~/.local/share/tj
-ln -sf ~/.local/share/tj/tj ~/.local/bin/tj
-```
+---
 
-Then bind it in `~/.tmux.conf` so it opens in a popup:
+If you installed without TPM, bind the popup yourself in `~/.tmux.conf`:
 
 ```tmux
 bind j display-popup -E -w 80% -h 75% "$HOME/.local/bin/tj"
