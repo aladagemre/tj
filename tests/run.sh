@@ -51,5 +51,30 @@ is "field 2 of the first row is a session name" \
    "1" \
    "$(awk 'NR==1 && ($2=="alpha" || $2=="beta"){c++} END{print c+0}' <<<"$out")"
 
+echo "ssh shim"
+
+# Round-trip: invoke the shim the way tj will (an -o pair, then host, then a
+# tmux command string) and prove the command lands on the *remote* test
+# server, not the local one, by looking for a session that only exists there.
+out=$("$ROOT/tests/fakebin/ssh" -o StrictHostKeyChecking=no myhost tmux list-sessions)
+is "ssh shim relays a remote command to the remote test server" \
+   "1" \
+   "$(grep -c '^api:' <<<"$out")"
+
+# Dead host: a host listed in TJ_FAKE_SSH_DEAD must exit exactly 255, the
+# value remote listing will branch on.
+TJ_FAKE_SSH_DEAD=deadhost "$ROOT/tests/fakebin/ssh" deadhost tmux list-sessions >/dev/null 2>&1
+is "ssh shim exits 255 for a host listed in TJ_FAKE_SSH_DEAD" \
+   "255" \
+   "$?"
+
+# Option skipping: an -o key=value pair AND a bare flag ahead of the host
+# must both be consumed by the flag-parsing loop without the host being
+# mistaken for one of their arguments.
+out=$("$ROOT/tests/fakebin/ssh" -o StrictHostKeyChecking=no -T myhost tmux list-sessions)
+is "ssh shim skips an -o pair and a bare flag ahead of the host" \
+   "1" \
+   "$(grep -c '^api:' <<<"$out")"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
