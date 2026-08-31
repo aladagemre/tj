@@ -98,11 +98,13 @@ ssh_q() {
 
 # Quote one argument for the remote shell. printf %q emits bash's $'…' form for
 # control characters, which a POSIX /bin/sh remote login shell would mis-parse.
-# That form is unreachable from the picker: the selected row is whitespace-split
-# before a name is handed on, and remote_rows drops any name with whitespace in
-# it outright, so no name carrying a control character can get this far. Keep
-# that invariant if you change the row contract — only then would this need a
-# POSIX-safe single-quote wrapper instead.
+# Nothing coming through the picker can carry one: the selected row is
+# whitespace-split before the name is handed on, and remote_rows never lets a
+# name containing whitespace reach the name field in the first place. One typed
+# straight into `tj <host>:<name>` does reach here, but it yields a malformed
+# remote command, not a second one — no injection is constructible either way.
+# Keep that invariant if you change the row contract; only then would this need
+# a POSIX-safe single-quote wrapper instead.
 qq() { printf '%q' "$1"; }
 
 # ---------------------------------------------------------------- formatting

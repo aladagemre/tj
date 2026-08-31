@@ -152,15 +152,21 @@ is "a metacharacter in a session name cannot become a second remote command" \
    "$([[ -e /tmp/tj-injected ]] && echo yes || echo no)"
 rm -f /tmp/tj-injected
 
-# Two words are NOT a remote target: `tj a b` is a fuzzy jump to `a`. The host
-# only ever arrives as `host:name`, which is what keeps "no hosts configured
-# means no ssh" true for every argument form.
+# Two words are NOT a remote target: `tj alph bogus` is a fuzzy jump to `alpha`,
+# the behaviour that existed before this branch. The host only ever arrives as
+# `host:name`, which is what keeps "no hosts configured means no ssh" true for
+# every argument form. Between them the three assertions leave the fuzzy jump as
+# the only path taken: no ssh rules out the remote form, and neither word became
+# a session, which rules out create_session.
 : >"$TJ_SSH_LOG"
-( unset TMUX; TJ_HOSTS=prod "$TJ" alpha bogus ) >/dev/null 2>&1
+( unset TMUX; TJ_HOSTS=prod "$TJ" alph bogus ) >/dev/null 2>&1
 is "a two-word argument runs no ssh" \
    "0" \
    "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
-is "a two-word argument creates no session named after the second word" \
+is "a two-word argument creates no session from the first word" \
+   "0" \
+   "$(srv "$LOCAL_SOCK" list-sessions -F '#{session_name}' | grep -c '^alph$')"
+is "a two-word argument creates no session from the second word" \
    "0" \
    "$(srv "$LOCAL_SOCK" list-sessions -F '#{session_name}' | grep -c '^bogus$')"
 
