@@ -192,8 +192,8 @@ is "killing a local session works" \
    "0" \
    "$(srv "$LOCAL_SOCK" list-sessions -F '#{session_name}' | grep -c '^doomed$')"
 
-TJ_HOSTS=prod "$TJ" --kill gone -
 : >"$TJ_SSH_LOG"
+TJ_HOSTS=prod "$TJ" --kill gone -
 is "killing a placeholder row opens no connection" \
    "0" \
    "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
