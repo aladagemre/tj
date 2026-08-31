@@ -74,30 +74,58 @@ be invisible until switched on.
 
 ## The list line
 
-`CLAUDE.md` fixes the contract: field 1 is the status mark (never empty), field 2 is
-the session name, and `awk '{print $2}'` plus fzf's `{2}` both read field 2.
+`CLAUDE.md` fixes the contract: field 1 is the status mark, never an empty string,
+and a fixed field position carries the session name, read by both `awk` and fzf's
+`{n}` expansion. Remote support keeps that discipline but moves the name one column
+right, because the host becomes a column of its own.
 
-Remote sessions keep that contract by encoding the host into the name as a single
-token:
+**Local-only mode** (no hosts configured) — byte-identical to today, name in field 2:
 
 ```
-· api-gateway        3h  2w  ~/work/api      (local, unchanged)
-◦ prod:api           1d  4w  /srv/api        (remote, detached)
-● prod:build         2h  1w  /srv/build      (remote, attached elsewhere)
-! prod:-                     unreachable     (host down)
+· api-gateway        3h  2w  ~/work/api
+· notes              1d  1w  ~/notes
 ```
+
+**Remote mode** (at least one host configured) — host in field 2, name in field 3:
+
+```
+· local   api-gateway    3h  2w  ~/work/api
+· local   notes          1d  1w  ~/notes
+◦ prod    api            2h  4w  /srv/api
+◦ prod    build          5h  1w  /srv/build
+◦ dev     scratch        1d  2w  ~/scratch
+! prod    -              -   -   unreachable
+```
+
+Grouping is achieved by ordering plus the repeated host column, **not** by separator
+or header rows. fzf has no notion of an unselectable line: a `──── prod ────` row
+could be highlighted and entered, and `awk` would read a word out of it and create a
+session by that name. Such rows also disappear the moment the user types a query,
+so they would only group the unfiltered view. The aligned column groups the list in
+every view and cannot be selected by accident.
 
 Marks are one column wide and never empty. Remote marks are drawn in a distinct
 colour from the local `●`/`○`/`·` set so the two groups stay tellable apart at a
 glance; the exact colour is an implementation detail, the non-emptiness is not.
 
-`:` is a safe separator because tmux rewrites it out of session names — creating a
-session named `has:colon` yields `has_colon` (verified on tmux 3.4). Any `:` in field
-2 therefore means "remote", and splitting on the *first* `:` is unambiguous.
+The host column also removes the need to encode the host into the session name, so
+there is no `host:session` parsing anywhere in the list path. The `:` form survives
+only as command-line sugar (`tj prod:api`), where it is short and natural; that is
+the one place a target string is split, on the first `:`. It is unambiguous because
+tmux rewrites `:` out of session names — creating a session named `has:colon` yields
+`has_colon` (verified on tmux 3.4).
 
-The unreachable row uses mark `!` and name `<host>:-` so the field count still
-holds; pressing enter on it fails with a message rather than attempting a
-connection, and `ctrl-x` on it is a no-op.
+The unreachable row uses mark `!`, the host in field 2 and `-` in field 3 so the
+field count still holds. Pressing enter on it fails with a message rather than
+attempting a connection, and `ctrl-x` on it is a no-op.
+
+### Field index is a variable, not a literal
+
+Because the name sits in field 2 or field 3 depending on whether hosts are
+configured, the index is computed once and used in the three places that read it:
+the `--preview` command, the `ctrl-x` binding, and the final `awk`. In remote mode
+the preview and kill commands receive host and name as two separate arguments
+(`{2} {3}`) rather than one string to be split.
 
 ## SSH transport
 
@@ -129,7 +157,7 @@ than hanging the picker. This is the documented cost of remote listing.
 | Key | Local row | Remote row |
 |---|---|---|
 | `enter` | unchanged | D1 |
-| `ctrl-x` | unchanged | `ssh <host> tmux kill-session -t <name>`, then reload |
+| `ctrl-x` | unchanged | `ssh <host> tmux kill-session -t <name>`, then reload; no-op on an unreachable row |
 | `ctrl-n` | unchanged | always creates a **local** session |
 | `ctrl-/` | unchanged | unchanged |
 
@@ -144,14 +172,17 @@ a `:`.
 functions). The existing `--list` / `--preview` entrypoints are extended and one is
 added:
 
-- `--list` — locals, then remotes appended.
-- `--preview <target>` — splits on the first `:`; renders locally or over SSH.
-- `--kill <target>` — new; replaces the inline `tmux kill-session` in the `ctrl-x`
-  binding so the local/remote decision lives in one place instead of inside an fzf
-  binding string.
+- `--list` — locals, then remotes appended, with the host column present only when
+  hosts are configured.
+- `--preview [<host>] <name>` — one argument renders a local session, two render a
+  remote one over SSH.
+- `--kill [<host>] <name>` — new; replaces the inline `tmux kill-session` in the
+  `ctrl-x` binding so the local/remote decision lives in one place instead of inside
+  an fzf binding string.
 
-New functions: `tj_hosts`, `ssh_opts`, `split_target`, `list_remote`, `enter_remote`,
-`kill_target`. Estimated size: ~100 added lines, taking the script from ~155 to ~255.
+New functions: `tj_hosts`, `ssh_opts`, `list_remote`, `enter_remote`, `kill_target`,
+and `parse_arg` for the `host:name` command-line form. Estimated size: ~110 added
+lines, taking the script from ~155 to ~265.
 
 ## Parallelism and cleanup
 
@@ -183,14 +214,15 @@ real code path including quoting.
 
 Cases to cover:
 
-1. No config, no `TJ_HOSTS` → output of `--list` is byte-identical to today's, and no
-   `ssh` process is spawned.
+1. No config, no `TJ_HOSTS` → output of `--list` is byte-identical to today's (name
+   still in field 2, no host column), and no `ssh` process is spawned.
 2. `--list` with one reachable fake host → local rows first, remote rows appended,
-   every row still has 5 whitespace-separated fields.
-3. `--list` with an unreachable host → `!` row present, command returns within the
-   connect timeout.
-4. `--preview prod:api` renders the remote pane; `--preview api` renders the local one.
-5. `--kill prod:api` kills on the fake remote only; the local session of the same name
+   every row has the same field count, and field 3 is the session name on every row
+   including the local ones.
+3. `--list` with an unreachable host → `!` row present, field count intact, command
+   returns within the connect timeout.
+4. `--preview prod api` renders the remote pane; `--preview api` renders the local one.
+5. `--kill prod api` kills on the fake remote only; the local session of the same name
    survives.
 6. D1 round trip: client moves to the fake remote server and returns to the original
    local session when the remote session dies.
@@ -199,7 +231,7 @@ Cases to cover:
 ## Release
 
 Version bumps to `0.2.0` in `tj`. `README.md` gains a "Remote sessions" section
-documenting the config file and the key-auth requirement. `CLAUDE.md` gains the
-`host:session` field-2 encoding and the fake-ssh test harness alongside the existing
-architecture notes. The Homebrew formula in `aladagemre/homebrew-tap` and
+documenting the config file and the key-auth requirement. `CLAUDE.md` gains the two list layouts and the rule
+that the name's field index is computed rather than hard-coded, plus the fake-ssh
+test harness, alongside the existing architecture notes. The Homebrew formula in `aladagemre/homebrew-tap` and
 `packaging/PKGBUILD` need their `url`/`sha256` bumped after tagging.
