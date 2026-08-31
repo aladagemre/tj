@@ -373,11 +373,25 @@ Then replace the `printf` at the end of the `while` loop inside `list_sessions` 
 
 - [ ] **Step 4: Run the tests and confirm today's output is unchanged**
 
+The comparison runs against the test socket, not the real server: two live
+captures of real sessions differ whenever an age ticks over between them, which
+would make the check flap for reasons that have nothing to do with the change.
+
 ```bash
 tests/run.sh
+
+S=tjtest-diff-$$
+export TJ_REAL_TMUX; TJ_REAL_TMUX=$(command -v tmux)
+export TJ_TEST_SOCKET=$S
+export PATH="$PWD/tests/fakebin:$PATH"
+"$TJ_REAL_TMUX" -L "$S" -f /dev/null new-session -d -s alpha -c /tmp -x 120 -y 30
+"$TJ_REAL_TMUX" -L "$S" -f /dev/null new-session -d -s beta  -c /tmp -x 120 -y 30
+
 git stash && TJ_HOSTS= ./tj --list > /tmp/tj-before.txt; git stash pop
 TJ_HOSTS= ./tj --list > /tmp/tj-after.txt
 diff /tmp/tj-before.txt /tmp/tj-after.txt && echo "IDENTICAL"
+
+"$TJ_REAL_TMUX" -L "$S" kill-server
 shellcheck --shell=bash tj tj.tmux
 ```
 
@@ -786,7 +800,10 @@ is "ending the remote session returns the terminal home" \
    "1" \
    "$(srv "$LOCAL_SOCK" list-clients -F '#{client_session}' | grep -c '^home$')"
 
+# T8 previews this session and greps for the marker, so restore it.
 srv "$REMOTE_SOCK" -f /dev/null new-session -d -s api -c /tmp -x 120 -y 30
+srv "$REMOTE_SOCK" send-keys -t api 'echo REMOTEMARK' Enter
+sleep 1
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -874,7 +891,9 @@ Append to `tests/run.sh`:
 echo "picker wiring"
 srv "$REMOTE_SOCK" -f /dev/null new-session -d -s solo -c /tmp -x 120 -y 30
 : >"$TJ_SSH_LOG"
-( TJ_HOSTS=prod "$TJ" prod:solo ) >/dev/null 2>&1
+# unset TMUX: this asserts the outside-tmux path, and inheriting a real $TMUX
+# would silently exercise the detach-client branch instead.
+( unset TMUX; TJ_HOSTS=prod "$TJ" prod:solo ) >/dev/null 2>&1
 is "host:name asks ssh for that host and session" \
    "1" \
    "$(grep -c 'prod.*tmux attach -t solo' "$TJ_SSH_LOG")"
