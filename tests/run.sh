@@ -331,6 +331,26 @@ is "a poisoned row does not break the field count of the list" \
    "0" \
    "$(awk 'NF<6{c++} END{print c+0}' <<<"$poisoned")"
 
+# Digits-only is not the same as base ten. Bash reads a leading zero as OCTAL,
+# so `08` or `0000000009` passes the guard above and then aborts BOTH arithmetic
+# contexts with "value too great for base": age is never assigned and the row
+# goes out with an empty age column — five fields where every other row has six,
+# the exact invariant the "?" path exists to hold. (`0755` fails quietly instead,
+# parsing as 493 and dating the row to 1970.) `10#` in human_age forces base ten.
+#
+# The payload is a real timestamp from the last ten seconds with a zero glued on
+# the front, so base ten renders it as `now` and anything else cannot. The `+ 9`
+# puts a nine in the value on every possible run date, which is what stops a
+# date whose epoch happens to be all octal digits from letting the bug pass.
+lead_zero_ts="0$(( ($(date +%s) / 10) * 10 + 9 ))"
+zeroed=$(TJ_HOSTS=prod TJ_FAKE_SSH_OUTPUT="$lead_zero_ts|leading|1|0|/tmp" "$TJ" --list | plain)
+is "a leading-zero timestamp still renders an age" \
+   "now" \
+   "$(awk '$2=="prod" && $3=="leading"{print $4}' <<<"$zeroed")"
+is "a leading-zero timestamp keeps the row at six fields" \
+   "1" \
+   "$(awk '$2=="prod" && $3=="leading" && NF==6 && $5=="1w"{c++} END{print c+0}' <<<"$zeroed")"
+
 echo "preview"
 srv "$LOCAL_SOCK"  send-keys -t alpha 'echo LOCALMARK' Enter
 srv "$REMOTE_SOCK" send-keys -t api   'echo REMOTEMARK' Enter

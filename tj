@@ -128,9 +128,22 @@ fmt_date() {
 # UNSET variable name, and HOME/PATH/PWD sail through. Reject first, compute
 # after; "?" keeps the row's field count intact so one bad row cannot shift the
 # list's field contract.
+#
+# Digits alone are not enough to make the arithmetic safe, only to make it
+# inert. Bash reads a leading zero as OCTAL, so `08` and `0000000009` are not
+# valid numbers at all: both the -eq and the $(( )) abort with "value too great
+# for base", age is never assigned, and the row goes out with an EMPTY age
+# field — five fields where every other row has six, which is the very
+# invariant the "?" above exists to hold. `0755` is worse for being quiet: it
+# parses as 493 and dates the row to 1970. `10#` forces base ten, and it is
+# safe here precisely because the guard has already established there is
+# nothing but digits to reinterpret. (A value too large for a 64-bit integer
+# still wraps silently, as it always has — a meaningless age, but a rendered
+# one, so the row keeps its shape.)
 human_age() {
   local ts=$1 now age
   [[ $ts =~ ^[0-9]+$ ]] || { echo "?"; return; }
+  ts=$((10#$ts))
   now=$(date +%s)
   [[ $ts -eq 0 ]] && { echo "never"; return; }
   age=$(( now - ts ))

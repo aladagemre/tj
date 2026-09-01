@@ -7,19 +7,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `tj` is a tmux session picker: it lists tmux sessions — on this machine and, if you've
 configured any, on remote hosts over `ssh` — ordered by when you last attached, filters
 them through `fzf`, and previews each session's live pane. The whole tool is one bash
-script (`tj`, 420 lines). `tj.tmux` is a separate 23-line entry point that only exists
+script (`tj`, 433 lines). `tj.tmux` is a separate 23-line entry point that only exists
 so the repo can be installed as a TPM (tmux plugin manager) plugin — it reads
 `@tj-key` / `@tj-width` / `@tj-height` and creates the key binding.
 
 There is no build step, and no dependencies beyond `tmux` and `fzf` — plus `ssh`, but
-only if you configure remote hosts. There is a 67-assertion test suite
+only if you configure remote hosts. There is a 69-assertion test suite
 (`tests/run.sh`); see Testing changes below.
 
 ## Commands
 
 ```sh
 shellcheck --shell=bash tj tj.tmux     # style/lint check; CI runs this
-tests/run.sh                           # the 67-assertion suite; CI runs this too
+tests/run.sh                           # the 69-assertion suite; CI runs this too
 ./tj --list                            # print the formatted session list (no UI)
 ./tj --preview <session>               # render the preview pane, local
 ./tj --preview <host> <name>           # ...for a session on a configured remote host
@@ -99,7 +99,10 @@ unvalidated. Two sinks exist today:
   context, and an array subscript inside that value is expanded in full — so a
   timestamp of `HOME[$(cmd)]` runs cmd locally. `set -u` is not a mitigation: it
   trips only on an *unset* variable name, and `HOME`/`PATH`/`PWD` all sail
-  through. Guarded by a `^[0-9]+$` check that runs before any arithmetic.
+  through. Guarded by a `^[0-9]+$` check that runs before any arithmetic — and
+  then by `ts=$((10#$ts))`, because digits alone only make the value inert:
+  bash reads a leading zero as octal, and `08` aborts the arithmetic entirely,
+  leaving the age column empty and the row one field short.
 - `name` → the **remote command string** in `render_preview`, `kill_target` and
   `enter_remote`. Guarded by `qq`, and additionally by the whitespace rule that
   makes such a row inert.
