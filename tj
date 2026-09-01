@@ -115,8 +115,20 @@ fmt_date() {
 }
 
 # human_age <unix-ts> -> "now" / "12m" / "3h" / "5d" / "14 Jun"
+#
+# The digits check is a SECURITY boundary, not tidiness. Every arithmetic
+# context below — `-eq` inside [[ ]], and $(( )) — makes bash evaluate the
+# *value* of ts as an expression, and an array subscript inside that value gets
+# fully expanded, command substitution included: a ts of `HOME[$(cmd)]` runs cmd
+# on this machine. Remote rows put a host's bytes in this argument (remote_rows),
+# so an unvalidated ts is arbitrary code execution here, on every --list and so
+# on every ctrl-x reload. `set -u` is not a mitigation — it only trips on an
+# UNSET variable name, and HOME/PATH/PWD sail through. Reject first, compute
+# after; "?" keeps the row's field count intact so one bad row cannot shift the
+# list's field contract.
 human_age() {
   local ts=$1 now age
+  [[ $ts =~ ^[0-9]+$ ]] || { echo "?"; return; }
   now=$(date +%s)
   [[ $ts -eq 0 ]] && { echo "never"; return; }
   age=$(( now - ts ))

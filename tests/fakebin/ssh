@@ -24,6 +24,17 @@ case " ${TJ_FAKE_SSH_DEAD:-} " in
   *" $host "*) exit 255 ;;
 esac
 
+# A cooperative host is only one kind of host. With TJ_FAKE_SSH_OUTPUT set the
+# shim never runs the relay: it prints that string verbatim and exits 0, which
+# is the only way the suite can play a compromised, spoofed or simply
+# wrapper-wearing host — one whose `tmux list-sessions` puts arbitrary bytes in
+# every field of a row. The relay double cannot do this by construction: a real
+# tmux only ever emits well-formed rows.
+if [[ -n ${TJ_FAKE_SSH_OUTPUT:-} ]]; then
+  printf '%s\n' "$TJ_FAKE_SSH_OUTPUT"
+  exit 0
+fi
+
 (( ${#cmd[@]} )) || exit 0
 # The command always begins with `tmux`, which resolves back to the fake tmux
 # above; pointing TJ_TEST_SOCKET at the remote server is what makes it "remote".

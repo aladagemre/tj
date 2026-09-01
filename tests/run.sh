@@ -16,6 +16,12 @@ REMOTE_SOCK=tjtest-remote-$$
 export TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK
 export TJ_SSH_LOG; TJ_SSH_LOG=$(mktemp)
 
+# Every injection assertion drops its marker file in here. A fixed shared path
+# under /tmp would make a leftover file owned by somebody else read as "the
+# injection fired", turning a passing suite red for a reason no one can
+# reproduce; a fresh directory per run cannot collide.
+markers=$(mktemp -d)
+
 pass=0
 fail=0
 ok() { printf '  \033[32mok\033[0m    %s\n' "$1"; pass=$((pass + 1)); }
@@ -85,9 +91,9 @@ rm_sock() {
 }
 
 # Everything the suite creates is removed here, and nothing else is: the two
-# tmux servers and their socket files, the ssh log, the injection marker, and
-# the two throwaway XDG_CONFIG_HOME directories. cfgdir/emptycfg do not exist
-# yet if the suite dies early, hence the :- guards.
+# tmux servers and their socket files, the ssh log, the injection markers, and
+# the throwaway XDG_CONFIG_HOME directories. cfgdir/emptycfg do not exist yet
+# if the suite dies early, hence the :- guards.
 cleanup() {
   local d
   srv "$LOCAL_SOCK"  kill-server 2>/dev/null
@@ -96,7 +102,7 @@ cleanup() {
   rm_sock "$REMOTE_SOCK"
   [[ -n ${TJ_SSH_LOG:-} ]] && rm -f "$TJ_SSH_LOG"
   rm -f /tmp/tj-injected
-  for d in "${cfgdir:-}" "${emptycfg:-}"; do
+  for d in "${cfgdir:-}" "${emptycfg:-}" "${markers:-}"; do
     [[ -n $d && -d $d ]] && rm -rf "${d:?}"
   done
   return 0
@@ -248,6 +254,38 @@ is "no field of any row carries the first word of that name" \
    "0" \
    "$(awk '$3=="my" || $4=="project"{c++} END{print c+0}' <<<"$spaced")"
 srv "$REMOTE_SOCK" kill-session -t 'my project'
+
+echo "hostile remote rows"
+
+# Up to here every remote row came from a real tmux through the relay double, so
+# the suite could only ever play a WELL-BEHAVED host. TJ_FAKE_SSH_OUTPUT makes
+# the shim print a canned row instead, which is the only way to ask the question
+# that matters: what happens when the bytes in a row were chosen by an attacker?
+#
+# Field 1 is the one that used to be fatal. tj feeds it to human_age, which puts
+# it in two bash ARITHMETIC contexts, and bash evaluates the *value* of a
+# variable there — an array subscript inside it is expanded in full, command
+# substitution included. `HOME[$(cmd)]` as a timestamp therefore ran cmd on the
+# machine merely opening the picker, on --list and so on every ctrl-x reload.
+# An UNSET name would have been stopped by `set -u`, which is why this looked
+# safe; HOME, PATH and PWD are all set and all sail through.
+inject=$markers/arith
+poisoned=$(TJ_HOSTS=prod TJ_FAKE_SSH_OUTPUT="HOME[\$(touch $inject)]|evil|1|0|/tmp" \
+  "$TJ" --list | plain)
+is "a poisoned timestamp field executes nothing" \
+   "no" \
+   "$([[ -e $inject ]] && echo yes || echo no)"
+
+# Refusing to execute is only half of it: the row still has to keep its shape.
+# The pre-fix code left `age` empty when the arithmetic blew up, which dropped
+# the row to 5 fields — one malformed row would then be the only row in the list
+# whose field count disagreed with everyone else's.
+is "a poisoned timestamp still yields a well-formed row" \
+   "1" \
+   "$(awk '$2=="prod" && $3=="evil" && NF>=6{c++} END{print c+0}' <<<"$poisoned")"
+is "a poisoned row does not break the field count of the list" \
+   "0" \
+   "$(awk 'NF<6{c++} END{print c+0}' <<<"$poisoned")"
 
 echo "preview"
 srv "$LOCAL_SOCK"  send-keys -t alpha 'echo LOCALMARK' Enter
