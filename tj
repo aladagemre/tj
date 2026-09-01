@@ -343,9 +343,12 @@ tmux has-session 2>/dev/null || {
 }
 
 # Direct jump: `tj api-gateway`. Only the first word is looked at, so `tj a b`
-# is a fuzzy jump to `a`. A host is never taken from a separate argument — it
-# always arrives as `host:name` — which is what keeps the promise that tj runs
-# no ssh at all when no hosts are configured.
+# is a fuzzy jump to `a`: a host is never assembled out of two arguments, it
+# only ever arrives glued on as `host:name`. Note what that does and does not
+# promise. The `host:name` branch above deliberately does NOT consult HOSTS —
+# spelling a host out is instruction enough, and `tj prod:api` works before
+# prod is ever added to the config — so "no hosts configured means no ssh"
+# describes the list and the picker, the paths that choose hosts on their own.
 if [[ -n ${1:-} ]]; then
   match=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -i -- "$1" | head -1)
   [[ -n $match ]] && { enter_session "$match"; exit 0; }

@@ -122,7 +122,14 @@ A few things worth knowing:
   list is a whitespace-separated table, so picking such a row would act on the
   wrong session.
 
-With no hosts configured tj never runs `ssh` and behaves exactly as it always has.
+With no hosts configured the list and the picker run no `ssh` at all and behave
+exactly as they always have. Naming a host yourself is the exception and always
+was: `tj prod:api` connects whether or not `prod` is in the config, since asking
+for a host by name is instruction enough.
+
+One compatibility note if you are upgrading: `tj foo:bar` used to create a
+*local* session called `foo_bar`, because tmux rewrites `:` in a session name.
+It now tries to reach session `bar` on host `foo`.
 
 ## How it works
 
