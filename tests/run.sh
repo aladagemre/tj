@@ -19,8 +19,21 @@ export TJ_SSH_LOG; TJ_SSH_LOG=$(mktemp)
 # Every injection assertion drops its marker file in here. A fixed shared path
 # under /tmp would make a leftover file owned by somebody else read as "the
 # injection fired", turning a passing suite red for a reason no one can
-# reproduce; a fresh directory per run cannot collide.
-markers=$(mktemp -d)
+# reproduce; a fresh directory per run cannot collide. The template carries no
+# dot on purpose: some payloads below are embedded in a tmux SESSION NAME, and
+# tmux rewrites `.` and `:` in one — a mangled path would make the injected
+# redirect fail for the wrong reason and pass the test vacuously.
+markers=$(mktemp -d "${TMPDIR:-/tmp}/tjmarkersXXXXXX")
+
+# Every `TJ_HOSTS= ` assertion below means "no hosts configured", but an EMPTY
+# TJ_HOSTS only skips the variable — tj then falls through to the config file.
+# On a machine that actually has one (the maintainer's, before anyone else's)
+# those assertions would read the real hosts and fail: green in CI, red for the
+# one person most likely to conclude the suite is broken rather than the code.
+# Point the whole run at an empty config directory. The host-configuration
+# block below still overrides XDG_CONFIG_HOME explicitly where it needs a file.
+emptycfg=$(mktemp -d)
+export XDG_CONFIG_HOME=$emptycfg
 
 pass=0
 fail=0
@@ -64,6 +77,19 @@ wait_for_log() {
   return 1
 }
 
+# Same idea for a client transition between the two test servers: how long tmux
+# takes to hand a terminal over varies, and every caller below asserts on this
+# function's own return value, so a timeout surfaces as a failed assertion
+# rather than as a later one failing for a reason nobody can see.
+wait_for_client() { # <socket> <format> <regex>
+  local sock=$1 fmt=$2 pattern=$3
+  for _ in $(seq 1 20); do
+    srv "$sock" list-clients -F "$fmt" 2>/dev/null | grep -q -- "$pattern" && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
 # fzf strips ANSI before expanding {n} and before printing the selected line, so
 # every field index in tj is an index into the *stripped* row. Raw output splits
 # differently: `%6s` left-pads the age, so its colour escape lands in a field of
@@ -101,7 +127,6 @@ cleanup() {
   rm_sock "$LOCAL_SOCK"
   rm_sock "$REMOTE_SOCK"
   [[ -n ${TJ_SSH_LOG:-} ]] && rm -f "$TJ_SSH_LOG"
-  rm -f /tmp/tj-injected
   for d in "${cfgdir:-}" "${emptycfg:-}" "${markers:-}"; do
     [[ -n $d && -d $d ]] && rm -rf "${d:?}"
   done
@@ -151,12 +176,11 @@ is "ssh shim skips an -o pair and a bare flag ahead of the host" \
 # carrying a shell metacharacter must cross the ssh hop as data, never as a
 # second command.
 : >"$TJ_SSH_LOG"
-rm -f /tmp/tj-injected
-( unset TMUX; TJ_HOSTS=prod "$TJ" 'prod:a;touch /tmp/tj-injected' ) >/dev/null 2>&1
+inject=$markers/outside-tmux
+( unset TMUX; TJ_HOSTS=prod "$TJ" "prod:a;touch $inject" ) >/dev/null 2>&1
 is "a metacharacter in a session name cannot become a second remote command" \
    "no" \
-   "$([[ -e /tmp/tj-injected ]] && echo yes || echo no)"
-rm -f /tmp/tj-injected
+   "$([[ -e $inject ]] && echo yes || echo no)"
 
 # Two words are NOT a remote target: `tj alph bogus` is a fuzzy jump to `alpha`,
 # the behaviour that existed before this branch. The host only ever arrives as
@@ -188,7 +212,6 @@ is "config file drops comments and blanks" \
    "prod dev" \
    "$(TJ_HOSTS= XDG_CONFIG_HOME="$cfgdir" "$TJ" --hosts | tr '\n' ' ' | sed 's/ $//')"
 
-emptycfg=$(mktemp -d)
 is "no config means no hosts" \
    "" \
    "$(TJ_HOSTS= XDG_CONFIG_HOME="$emptycfg" "$TJ" --hosts)"
@@ -360,7 +383,10 @@ is "a client is attached before the transition" \
 
 srv "$LOCAL_SOCK" send-keys -t home \
   "TJ_HOSTS=prod TJ_TEST_SOCKET=$LOCAL_SOCK TJ_REAL_TMUX=$TJ_REAL_TMUX PATH=$ROOT/tests/fakebin:\$PATH TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK $TJ prod:api" Enter
-sleep 3
+
+is "the terminal arrives on the remote server" \
+   "yes" \
+   "$(wait_for_client "$REMOTE_SOCK" '#{client_tty}' "^$tty_before$" && echo yes || echo no)"
 
 is "the client left the local server" \
    "0" \
@@ -370,7 +396,9 @@ is "the same terminal now drives the remote server" \
    "$(srv "$REMOTE_SOCK" list-clients -F '#{client_tty}' | grep -c "^$tty_before$")"
 
 srv "$REMOTE_SOCK" kill-session -t api
-sleep 2
+is "the terminal comes back after the remote session ends" \
+   "yes" \
+   "$(wait_for_client "$LOCAL_SOCK" '#{client_session}' '^home$' && echo yes || echo no)"
 is "ending the remote session returns the terminal home" \
    "1" \
    "$(srv "$LOCAL_SOCK" list-clients -F '#{client_session}' | grep -c '^home$')"
@@ -479,6 +507,71 @@ is "the client returns home after a picker-driven remote enter" \
         [[ $c == 1 ]] && break
         sleep 0.2
       done; echo "$c")"
+
+# Everything above enters remote rows named `api` and `solo` — names that could
+# not carry an injection if they tried. The one metacharacter test so far (near
+# the top of this file) drives the OTHER branch of enter_remote: outside tmux,
+# `exec ssh -t`, one qq and one shell. The branch the picker actually takes is
+# the inside-tmux one, where the remote command is folded into a doubly-quoted
+# `detach-client -E` string and then parsed by three shells in sequence — tmux's
+# own -E handling, the /bin/sh tmux spawns to run it, and the remote login
+# shell. A `;` has to survive all three as data.
+#
+# The payload writes its marker with `>` rather than `touch <path>` because it
+# has to fit in a session name with no whitespace in it: a remote name
+# containing whitespace is deliberately listed as an inert '-' row and cannot be
+# picked at all. The spaced half of the question is asked right after this,
+# through the one form that can carry a space.
+#
+# The session really exists on the remote server, so correct quoting ATTACHES to
+# it — arrival is the ordering anchor that says the remote shell has already run
+# whatever it was going to run, which is what makes the marker check below a
+# real verdict rather than a race. Broken quoting fails both assertions: the
+# attach would be to `zz` alone, which does not exist, and the trailing
+# redirect would create the marker.
+hostile_pick="zz;>$markers/picker-enter"
+srv "$REMOTE_SOCK" -f /dev/null new-session -d -s "$hostile_pick" -c /tmp -x 120 -y 30
+: >"$TJ_SSH_LOG"
+launch_picker
+is "the live picker has drawn its list before entering the hostile row" \
+   "yes" \
+   "$(wait_for_pane "$LOCAL_SOCK" home 'local.*beta' && echo yes || echo no)"
+srv "$LOCAL_SOCK" send-keys -t home "'zz"
+is "the 'zz query is applied before enter is sent" \
+   "yes" \
+   "$(filtered "'zz" 'local.*beta' && echo yes || echo no)"
+srv "$LOCAL_SOCK" send-keys -t home Enter
+is "a picked name containing ';' reaches the remote host whole" \
+   "yes" \
+   "$(wait_for_client "$REMOTE_SOCK" '#{client_session}' '^zz' && echo yes || echo no)"
+is "a ';' in a picked remote name runs no second command" \
+   "no" \
+   "$([[ -e $markers/picker-enter ]] && echo yes || echo no)"
+srv "$REMOTE_SOCK" kill-session -t "$hostile_pick"
+is "the client comes home from the hostile session" \
+   "yes" \
+   "$(wait_for_client "$LOCAL_SOCK" '#{client_session}' '^home$' && echo yes || echo no)"
+
+# Now the space. It cannot come through the picker, so it comes through
+# `tj <host>:<name>` typed INSIDE tmux, which is the same detach-client -E
+# branch with the same three shells; only the way the name is chosen differs.
+# `;` and a space together are what would split this string into two commands at
+# any of the three hops.
+: >"$TJ_SSH_LOG"
+hostile_arg="danger name;>$markers/direct-enter"
+srv "$REMOTE_SOCK" -f /dev/null new-session -d -s "$hostile_arg" -c /tmp -x 120 -y 30
+srv "$LOCAL_SOCK" send-keys -t home \
+  "TJ_HOSTS=prod TJ_TEST_SOCKET=$LOCAL_SOCK TJ_REAL_TMUX=$TJ_REAL_TMUX PATH=$ROOT/tests/fakebin:\$PATH TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK $TJ 'prod:$hostile_arg'" Enter
+is "a name with a space and a ';' reaches the remote host whole" \
+   "yes" \
+   "$(wait_for_client "$REMOTE_SOCK" '#{client_session}' '^danger name' && echo yes || echo no)"
+is "a space and a ';' together run no second command" \
+   "no" \
+   "$([[ -e $markers/direct-enter ]] && echo yes || echo no)"
+srv "$REMOTE_SOCK" kill-session -t "$hostile_arg"
+is "the client comes home from the spaced hostile session" \
+   "yes" \
+   "$(wait_for_client "$LOCAL_SOCK" '#{client_session}' '^home$' && echo yes || echo no)"
 
 # `api` exists under both hosts already (the collision fixture from the
 # preview tests above): a stale index that killed the wrong one would either
