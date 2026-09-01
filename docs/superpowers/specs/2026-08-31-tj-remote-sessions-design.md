@@ -158,8 +158,11 @@ machine), which keeps the control socket path under the unix-socket length limit
 `BatchMode=yes` means a host needing a password simply reports as unreachable rather
 than hanging the picker. This is the documented cost of remote listing.
 
-**Entering a session** (interactive): plain `ssh -t`, no `BatchMode`, so password and
-2FA prompts still work. An existing control master is reused if one is up.
+**Entering a session** (interactive): plain `ssh -t` with none of the listing
+options — no `BatchMode`, so password and 2FA prompts still work, and no
+`ControlPath`, so it never joins the listing connection's control master and
+authenticates on its own. That is deliberate: the interactive attach is the one
+place a prompt has to reach the terminal.
 
 ## Behaviour of each key
 

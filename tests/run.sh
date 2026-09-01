@@ -200,6 +200,27 @@ is "a two-word argument creates no session from the second word" \
    "0" \
    "$(srv "$LOCAL_SOCK" list-sessions -F '#{session_name}' | grep -c '^bogus$')"
 
+# `local` labels this machine in the host column and the config layer refuses it
+# as a real host name, so `tj local:alpha` can only mean the local session —
+# it used to try to ssh to a host that by construction cannot exist.
+: >"$TJ_SSH_LOG"
+( unset TMUX; TJ_HOSTS=prod "$TJ" local:alpha ) >/dev/null 2>&1
+is "'local' as the host half runs no ssh" \
+   "0" \
+   "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
+
+# An empty half is a typo, and inside tmux it used to cost the user their
+# client: detach-client handed the terminal to a doomed ssh and only the return
+# ticket brought it back.
+: >"$TJ_SSH_LOG"
+( unset TMUX; TJ_HOSTS=prod "$TJ" prod: ) >/dev/null 2>&1
+is "an empty session half is refused" "1" "$?"
+( unset TMUX; TJ_HOSTS=prod "$TJ" :api ) >/dev/null 2>&1
+is "an empty host half is refused" "1" "$?"
+is "neither empty half opens a connection" \
+   "0" \
+   "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
+
 echo "host configuration"
 is "TJ_HOSTS splits on whitespace" \
    "prod dev" \

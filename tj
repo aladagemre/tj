@@ -98,13 +98,15 @@ ssh_q() {
 
 # Quote one argument for the remote shell. printf %q emits bash's $'…' form for
 # control characters, which a POSIX /bin/sh remote login shell would mis-parse.
-# Nothing coming through the picker can carry one: the selected row is
-# whitespace-split before the name is handed on, and remote_rows never lets a
-# name containing whitespace reach the name field in the first place. One typed
-# straight into `tj <host>:<name>` does reach here, but it yields a malformed
-# remote command, not a second one — no injection is constructible either way.
-# Keep that invariant if you change the row contract; only then would this need
-# a POSIX-safe single-quote wrapper instead.
+# A name CAN carry one: the row contract rejects whitespace, not every control
+# character, so a remote host is free to put \x01 or \x7f in a session name and
+# that name reaches here through the picker — as does anything typed straight
+# into `tj <host>:<name>`. The conclusion is unchanged, only the reason for it:
+# %q wraps such a name so that a POSIX sh reads it as one literal word, and the
+# worst case is a remote command naming a session that does not exist, or a
+# syntax error on the remote — malformed, never a second command. What would
+# break that is a change letting an UNQUOTED name reach a shell; only then would
+# this need a POSIX-safe single-quote wrapper instead.
 qq() { printf '%q' "$1"; }
 
 # ---------------------------------------------------------------- formatting
@@ -277,6 +279,16 @@ enter_session() {
 # the session it came from.
 enter_remote() {
   local host=$1 name=$2 back
+  # `tj prod:` and `tj :api` are typos, and without this they cost the user
+  # their client: detach-client hands the terminal to a doomed ssh and only the
+  # return ticket brings it back. Refuse before anything detaches.
+  [[ -n $host && -n $name ]] ||
+    die "expected <host>:<session>, got '$host:$name'"
+  # `local` is this machine's label in the host column, and the config layer
+  # refuses it as a real host name — so `tj local:alpha` can only mean the local
+  # session, never an ssh to a host called "local". render_preview and
+  # kill_target already make the same exception; this is the third.
+  [[ $host == local ]] && { enter_session "$name"; return; }
   # ssh does not preserve argument boundaries: it re-joins everything after the
   # host with plain spaces and hands the result to the remote shell. So the
   # remote command must arrive as ONE already-quoted string, the way ssh_q

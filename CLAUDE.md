@@ -7,19 +7,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `tj` is a tmux session picker: it lists tmux sessions — on this machine and, if you've
 configured any, on remote hosts over `ssh` — ordered by when you last attached, filters
 them through `fzf`, and previews each session's live pane. The whole tool is one bash
-script (`tj`, 393 lines). `tj.tmux` is a separate 23-line entry point that only exists
+script (`tj`, 420 lines). `tj.tmux` is a separate 23-line entry point that only exists
 so the repo can be installed as a TPM (tmux plugin manager) plugin — it reads
 `@tj-key` / `@tj-width` / `@tj-height` and creates the key binding.
 
 There is no build step, and no dependencies beyond `tmux` and `fzf` — plus `ssh`, but
-only if you configure remote hosts. There is a 50-assertion test suite
+only if you configure remote hosts. There is a 67-assertion test suite
 (`tests/run.sh`); see Testing changes below.
 
 ## Commands
 
 ```sh
 shellcheck --shell=bash tj tj.tmux     # style/lint check; CI runs this
-tests/run.sh                           # the 50-assertion suite; CI runs this too
+tests/run.sh                           # the 67-assertion suite; CI runs this too
 ./tj --list                            # print the formatted session list (no UI)
 ./tj --preview <session>               # render the preview pane, local
 ./tj --preview <host> <name>           # ...for a session on a configured remote host
@@ -48,6 +48,12 @@ Run the suite with `tests/run.sh`. To exercise `enter`/`ctrl-n`/`ctrl-x` end to
 end you need a real client attached (`switch-client` and `detach-client` fail
 with none), so background one with
 `nohup script -qc "tmux -L <sock> attach -t demo" /dev/null &`.
+
+**The suite is Linux-only, even though `tj` is not.** It uses GNU spellings that
+BSD/macOS does not share — `mktemp -d <template>` and `script -qc <cmd> <file>`
+— and CI runs it on Linux. The portability rules in Architecture below govern
+`tj` itself; do not read a green suite as evidence that a change works on macOS,
+and do not be surprised when `tests/run.sh` will not start there.
 
 ## Architecture
 
@@ -81,6 +87,28 @@ mis-targeting one they can see. For the same reason a config line with
 whitespace left in it (`prod dev`) is a fatal error rather than being glued into
 one host — a host string must never be able to widen the row.
 
+**Every field of a remote row is untrusted input.** A remote row is whatever
+that host's `tmux list-sessions` printed, so a host that is compromised,
+spoofed, or simply running a `tmux` wrapper chooses those bytes — and they
+arrive on every `--list`, which is every time the picker opens and every
+`ctrl-x` reload. No field may reach an arithmetic or a shell context
+unvalidated. Two sinks exist today:
+
+- `ts` → **bash arithmetic** (`[[ $ts -eq 0 ]]` and `$(( now - ts ))` in
+  `human_age`). Bash evaluates the *value* of a variable in an arithmetic
+  context, and an array subscript inside that value is expanded in full — so a
+  timestamp of `HOME[$(cmd)]` runs cmd locally. `set -u` is not a mitigation: it
+  trips only on an *unset* variable name, and `HOME`/`PATH`/`PWD` all sail
+  through. Guarded by a `^[0-9]+$` check that runs before any arithmetic.
+- `name` → the **remote command string** in `render_preview`, `kill_target` and
+  `enter_remote`. Guarded by `qq`, and additionally by the whitespace rule that
+  makes such a row inert.
+
+`wins`, `att` and `path` reach nothing but `printf %s` today, which is why they
+carry no guard. Check any new column against this rule before adding it, and
+add a `TJ_FAKE_SSH_OUTPUT` assertion for it — that env var makes the ssh double
+print a canned row, which is the only way the suite can play a hostile host.
+
 **Ordering** comes from tmux itself: `session_last_attached`, falling back to
 `session_created` for sessions never attached, sorted descending. Nothing is cached.
 
@@ -100,7 +128,10 @@ return to the session it left, so exactly one tmux is ever attached. Nesting was
 rejected: it forces a doubled prefix on every remote keystroke. The remote
 command is built as ONE `qq`-quoted string, like `ssh_q`'s, because ssh re-joins
 its arguments with plain spaces — bare words would split a session name
-containing a space and execute one containing `;`.
+containing a space and execute one containing `;`. `local` as the host, and
+either half of `host:name` coming up empty, are settled *before* anything
+detaches: a detach that hands the terminal to a doomed `ssh` costs the user
+their client for as long as the return ticket takes.
 
 **Portability.** GNU and BSD/macOS disagree on `date -d @<ts>` vs `date -r <ts>` and on
 `readlink -f`; both have explicit fallbacks (`fmt_date`, the `$self` block). Keep any
