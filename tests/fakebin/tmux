@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Test double for tmux: pins every call to the throwaway server named by
+# TJ_TEST_SOCKET. tj calls plain `tmux`, so this shim is the only thing standing
+# between the suite and the user's real sessions. TMUX_TMPDIR is NOT used: with a
+# server already running, a client still resolves to the default socket.
+set -u
+: "${TJ_REAL_TMUX:?fake tmux: TJ_REAL_TMUX is not set}"
+: "${TJ_TEST_SOCKET:?fake tmux: TJ_TEST_SOCKET is not set}"
+case $TJ_TEST_SOCKET in
+  tjtest-*) ;;
+  *) printf 'fake tmux: refusing socket %s\n' "$TJ_TEST_SOCKET" >&2; exit 1 ;;
+esac
+exec "$TJ_REAL_TMUX" -L "$TJ_TEST_SOCKET" "$@"

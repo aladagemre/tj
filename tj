@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # tj — jump between tmux sessions, most recently used first.
 #
-#   tj              open the picker (attach from outside tmux, switch from inside)
-#   tj <name>       jump straight to a session (fuzzy, first match wins)
-#   tj --list       print the formatted session list (used by fzf reload)
-#   tj --preview X  render the preview pane for session X (used by fzf)
-#   tj --version    print the version
+#   tj                            open the picker (attach from outside tmux, switch from inside)
+#   tj <name>                     jump straight to a session (fuzzy, first match wins)
+#   tj <host>:<name>              jump to a session on a remote host
+#   tj --list                     print the formatted session list (used by fzf reload)
+#   tj --preview [<host>] <name>  render the preview pane (used by fzf)
+#   tj --kill [<host>] <name>     kill a session (used by ctrl-x)
+#   tj --hosts                    print the configured remote hosts, one per line
+#   tj --version                  print the version
 #
 # Keys inside the picker:
 #   enter    attach / switch to the highlighted session
@@ -16,7 +19,7 @@
 
 set -uo pipefail
 
-VERSION=0.1.0
+VERSION=0.2.0
 
 # BSD readlink has no -f; fall back to resolving the symlink by hand.
 if self="$(readlink -f "$0" 2>/dev/null)"; then :; else
@@ -32,6 +35,80 @@ die() { printf '%s\n' "$*" >&2; exit 1; }
 
 command -v tmux >/dev/null || die "tmux is not installed"
 
+# ---------------------------------------------------------------- remote hosts
+
+# Hosts to ask for sessions, one per line. TJ_HOSTS (space separated) wins over
+# the config file. With neither set tj runs no ssh at all, which is what keeps
+# the local-only path exactly as fast as it has always been.
+tj_hosts() {
+  local f line hosts=()
+  if [[ -n ${TJ_HOSTS:-} ]]; then
+    read -r -a hosts <<<"$TJ_HOSTS"
+  else
+    f="${XDG_CONFIG_HOME:-$HOME/.config}/tj/hosts"
+    [[ -r $f ]] || return 0
+    while IFS= read -r line || [[ -n $line ]]; do
+      line=${line%%#*}
+      # Trim the ends only. Whitespace surviving in the middle would put a
+      # space in the host column and shift every field after it — but silently
+      # deleting it (which is what stripping every space used to do) turned
+      # `prod dev` on one line into one mystery host `proddev`, reported later
+      # as an unreachable row. Refuse the line instead of guessing.
+      line=${line#"${line%%[![:space:]]*}"}
+      line=${line%"${line##*[![:space:]]}"}
+      [[ -n $line ]] || continue
+      [[ $line == *[[:space:]]* ]] &&
+        die "one host per line: '$line' in $f has whitespace in it"
+      hosts+=("$line")
+    done <"$f"
+  fi
+  (( ${#hosts[@]} )) || return 0
+  printf '%s\n' "${hosts[@]}"
+}
+
+# tj_hosts runs in a command substitution, so a `die` inside it only ends that
+# subshell: the message still reaches stderr, but the status has to be forwarded
+# here or a rejected config would read as a silent "no hosts configured".
+HOSTS=$(tj_hosts) || exit 1
+
+# "local" labels this machine in the host column, so it cannot also name a
+# remote host without making the column ambiguous.
+[[ $'\n'$HOSTS$'\n' == *$'\n'local$'\n'* ]] &&
+  die "'local' is a reserved host name — rename it in your tj hosts config"
+
+# The session name is field 2 normally and field 3 once a host column exists,
+# and the host — when there is one at all — is always field 2. Everything that
+# reads either asks these variables instead of hard-coding an index: the fzf
+# preview command, the ctrl-x kill binding, and the final awk on the selected
+# line. Add a column and only this line changes.
+if [[ -n $HOSTS ]]; then HOSTF=2; NAMEF=3; else HOSTF=; NAMEF=2; fi
+
+# Non-interactive ssh for listing and previewing: never prompt, never hang, and
+# hold one multiplexed connection open so the fzf preview — which re-runs on
+# every cursor move — does not pay for a fresh handshake each time. %C is a
+# fixed-length hash, which keeps the control socket inside the unix path limit.
+ssh_q() {
+  ssh -o BatchMode=yes \
+      -o ConnectTimeout=2 \
+      -o ControlMaster=auto \
+      -o ControlPersist=60 \
+      -o ControlPath="$HOME/.ssh/tj-%C" \
+      "$@"
+}
+
+# Quote one argument for the remote shell. printf %q emits bash's $'…' form for
+# control characters, which a POSIX /bin/sh remote login shell would mis-parse.
+# A name CAN carry one: the row contract rejects whitespace, not every control
+# character, so a remote host is free to put \x01 or \x7f in a session name and
+# that name reaches here through the picker — as does anything typed straight
+# into `tj <host>:<name>`. The conclusion is unchanged, only the reason for it:
+# %q wraps such a name so that a POSIX sh reads it as one literal word, and the
+# worst case is a remote command naming a session that does not exist, or a
+# syntax error on the remote — malformed, never a second command. What would
+# break that is a change letting an UNQUOTED name reach a shell; only then would
+# this need a POSIX-safe single-quote wrapper instead.
+qq() { printf '%q' "$1"; }
+
 # ---------------------------------------------------------------- formatting
 
 # GNU coreutils and BSD/macOS disagree on how to format a unix timestamp.
@@ -40,8 +117,33 @@ fmt_date() {
 }
 
 # human_age <unix-ts> -> "now" / "12m" / "3h" / "5d" / "14 Jun"
+#
+# The digits check is a SECURITY boundary, not tidiness. Every arithmetic
+# context below — `-eq` inside [[ ]], and $(( )) — makes bash evaluate the
+# *value* of ts as an expression, and an array subscript inside that value gets
+# fully expanded, command substitution included: a ts of `HOME[$(cmd)]` runs cmd
+# on this machine. Remote rows put a host's bytes in this argument (remote_rows),
+# so an unvalidated ts is arbitrary code execution here, on every --list and so
+# on every ctrl-x reload. `set -u` is not a mitigation — it only trips on an
+# UNSET variable name, and HOME/PATH/PWD sail through. Reject first, compute
+# after; "?" keeps the row's field count intact so one bad row cannot shift the
+# list's field contract.
+#
+# Digits alone are not enough to make the arithmetic safe, only to make it
+# inert. Bash reads a leading zero as OCTAL, so `08` and `0000000009` are not
+# valid numbers at all: both the -eq and the $(( )) abort with "value too great
+# for base", age is never assigned, and the row goes out with an EMPTY age
+# field — five fields where every other row has six, which is the very
+# invariant the "?" above exists to hold. `0755` is worse for being quiet: it
+# parses as 493 and dates the row to 1970. `10#` forces base ten, and it is
+# safe here precisely because the guard has already established there is
+# nothing but digits to reinterpret. (A value too large for a 64-bit integer
+# still wraps silently, as it always has — a meaningless age, but a rendered
+# one, so the row keeps its shape.)
 human_age() {
   local ts=$1 now age
+  [[ $ts =~ ^[0-9]+$ ]] || { echo "?"; return; }
+  ts=$((10#$ts))
   now=$(date +%s)
   [[ $ts -eq 0 ]] && { echo "never"; return; }
   age=$(( now - ts ))
@@ -50,6 +152,21 @@ human_age() {
   elif (( age < 86400 ));  then echo "$(( age / 3600 ))h"
   elif (( age < 604800 )); then echo "$(( age / 86400 ))d"
   else fmt_date "$ts"
+  fi
+}
+
+# One list row. The host column exists only when hosts are configured, which is
+# what keeps today's output — and the name's field index — untouched for anyone
+# not using the feature. Colouring the host is safe: fzf strips ANSI both when
+# expanding {n} and when printing the selected line.
+emit_row() {
+  local mark=$1 host=$2 name=$3 age=$4 wins=$5 path=$6
+  if [[ -n $HOSTS ]]; then
+    printf '%b \033[38;5;110m%-8s\033[0m %-18s \033[38;5;244m%6s  %s  %s\033[0m\n' \
+      "$mark" "$host" "$name" "$age" "$wins" "$path"
+  else
+    printf '%b %-18s \033[38;5;244m%6s  %s  %s\033[0m\n' \
+      "$mark" "$name" "$age" "$wins" "$path"
   fi
 }
 
@@ -69,19 +186,92 @@ list_sessions() {
     else                                 mark=$'\033[38;5;240m·\033[0m'
     fi
     home_short="${path/#$HOME/\~}"
-    printf '%b %-18s \033[38;5;244m%6s  %sw  %s\033[0m\n' \
-      "$mark" "$name" "$age" "$wins" "$home_short"
+    emit_row "$mark" local "$name" "$age" "${wins}w" "$home_short"
   done
 }
 
+# Sessions on one host. ssh exits 255 when it cannot reach the host at all,
+# which is the only failure worth a visible row: a reachable host with no
+# sessions should simply contribute nothing.
+remote_rows() {
+  local host=$1 out rc ts name wins att path age mark
+  out=$(ssh_q "$host" \
+    "tmux list-sessions -F '#{?session_last_attached,#{session_last_attached},#{session_created}}|#{session_name}|#{session_windows}|#{?session_attached,1,0}|#{session_path}'" \
+    2>/dev/null)
+  rc=$?
+  if (( rc == 255 )); then
+    emit_row $'\033[31m!\033[0m' "$host" - - - unreachable
+    return 0
+  fi
+  (( rc == 0 )) || return 0
+  printf '%s\n' "$out" | sort -t'|' -rn -k1,1 |
+  while IFS='|' read -r ts name wins att path; do
+    [[ -n $name ]] || continue
+    age=$(human_age "$ts")
+    # The row is whitespace-split by both fzf's {n} and the final awk, so a name
+    # containing any would shift every later field and get the WRONG session
+    # previewed, entered or killed. This branch widened who chooses that string
+    # from the user to any host they list, so such a row is emitted
+    # visible-but-inert instead — the same shape the unreachable row uses: a '!'
+    # mark and '-' where the name goes, which every consumer already ignores.
+    if [[ $name == *[[:space:]]* ]]; then
+      emit_row $'\033[31m!\033[0m' "$host" - "$age" "${wins}w" "skipped: name has whitespace"
+      continue
+    fi
+    # Both remote marks are drawn in their own colours, not the local
+    # ●/○/· palette, so the two groups stay tellable apart at a glance even
+    # when the host column has scrolled out of view.
+    if [[ $att == 1 ]]; then mark=$'\033[36m○\033[0m'
+    else                     mark=$'\033[38;5;66m·\033[0m'
+    fi
+    emit_row "$mark" "$host" "$name" "$age" "${wins}w" "$path"
+  done
+}
+
+# Every host is queried at once: one slow or dead host must not decide how long
+# the picker takes to open. Output files are named by loop index, never by host,
+# so a host string can never influence a path.
+list_remote() {
+  [[ -n $HOSTS ]] || return 0
+  # The body runs in a subshell purely so the cleanup can be a trap that belongs
+  # to this function alone. list_remote is called inside `{ …; } | fzf`, so an
+  # fzf that quits before draining the pipe — or any interrupt — can end this
+  # shell wherever it happens to be; an `rm` on the last line would simply never
+  # run and leave the directory behind. Both guards stay: this repo never lets
+  # an `rm -rf` see an unguarded variable.
+  (
+    local dir host i=0
+    dir=$(mktemp -d "${TMPDIR:-/tmp}/tj.XXXXXX") || exit 0
+    trap '[[ -n ${dir:-} && -d ${dir:-} ]] && rm -rf "${dir:?}"' EXIT HUP INT TERM
+    while IFS= read -r host; do
+      i=$((i + 1))
+      remote_rows "$host" >"$dir/$i" 2>/dev/null &
+    done <<<"$HOSTS"
+    wait
+    i=0
+    while IFS= read -r _; do
+      i=$((i + 1))
+      [[ -f $dir/$i ]] && cat "$dir/$i"
+    done <<<"$HOSTS"
+  )
+}
+
 render_preview() {
-  local name=$1
-  [[ -z $name ]] && return 0
-  printf '\033[1m%s\033[0m\n' "$name"
-  tmux list-windows -t "$name" \
-    -F '  #{window_index}: #{window_name}#{?window_active, *,}  (#{pane_current_command})' 2>/dev/null
-  printf '\033[38;5;244m%s\033[0m\n' "────────────────────────────────────────"
-  tmux capture-pane -ep -t "$name" 2>/dev/null | tail -n 40
+  local host="" name rule
+  if (( $# >= 2 )); then host=$1; name=$2; else name=${1:-}; fi
+  [[ -z $name || $name == - ]] && return 0
+  rule="────────────────────────────────────────"
+  printf '\033[1m%s\033[0m\n' "${host:+$host · }$name"
+  if [[ -n $host && $host != local ]]; then
+    ssh_q "$host" "tmux list-windows -t $(qq "$name") -F '  #{window_index}: #{window_name}#{?window_active, *,}  (#{pane_current_command})'" 2>/dev/null
+    printf '\033[38;5;244m%s\033[0m\n' "$rule"
+    ssh_q "$host" "tmux capture-pane -ep -t $(qq "$name")" 2>/dev/null | tail -n 40
+  else
+    tmux list-windows -t "$name" \
+      -F '  #{window_index}: #{window_name}#{?window_active, *,}  (#{pane_current_command})' 2>/dev/null
+    printf '\033[38;5;244m%s\033[0m\n' "$rule"
+    tmux capture-pane -ep -t "$name" 2>/dev/null | tail -n 40
+  fi
 }
 
 # --------------------------------------------------------------- transitions
@@ -95,6 +285,37 @@ enter_session() {
   fi
 }
 
+# Inside tmux, switch-client cannot cross machines. Rather than nesting a remote
+# tmux inside the local one — which costs a doubled prefix on every remote
+# keystroke — hand the terminal over. The chained second command is the return
+# ticket: when the remote session ends or ssh drops, the terminal falls back to
+# the session it came from.
+enter_remote() {
+  local host=$1 name=$2 back
+  # `tj prod:` and `tj :api` are typos, and without this they cost the user
+  # their client: detach-client hands the terminal to a doomed ssh and only the
+  # return ticket brings it back. Refuse before anything detaches.
+  [[ -n $host && -n $name ]] ||
+    die "expected <host>:<session>, got '$host:$name'"
+  # `local` is this machine's label in the host column, and the config layer
+  # refuses it as a real host name — so `tj local:alpha` can only mean the local
+  # session, never an ssh to a host called "local". render_preview and
+  # kill_target already make the same exception; this is the third.
+  [[ $host == local ]] && { enter_session "$name"; return; }
+  # ssh does not preserve argument boundaries: it re-joins everything after the
+  # host with plain spaces and hands the result to the remote shell. So the
+  # remote command must arrive as ONE already-quoted string, the way ssh_q
+  # sends its own. Bare words would let a session name containing a space split
+  # in two, and one containing `;` run as a second command on the remote host.
+  if [[ -n ${TMUX:-} ]]; then
+    back=$(tmux display-message -p '#S')
+    tmux detach-client -E \
+      "ssh -t $(qq "$host") $(qq "tmux attach -t $(qq "$name")"); tmux attach -t $(qq "$back")"
+  else
+    exec ssh -t "$host" "tmux attach -t $(qq "$name")"
+  fi
+}
+
 create_session() {
   local name=$1
   tmux has-session -t "=$name" 2>/dev/null && { enter_session "$name"; return; }
@@ -105,21 +326,54 @@ create_session() {
   fi
 }
 
+# Killing lives behind an entrypoint rather than inline in the fzf binding, so
+# the local/remote decision sits in one place. Always exits 0: a failed kill
+# must not make the picker's reload look broken.
+kill_target() {
+  local host="" name
+  if (( $# >= 2 )); then host=$1; name=$2; else name=${1:-}; fi
+  [[ -z $name || $name == - ]] && return 0
+  if [[ -n $host && $host != local ]]; then
+    ssh_q "$host" "tmux kill-session -t $(qq "$name")" >/dev/null 2>&1
+  else
+    tmux kill-session -t "$name" >/dev/null 2>&1
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------- entrypoints
 
 case "${1:-}" in
-  --list)    list_sessions; exit 0 ;;
-  --preview) render_preview "${2:-}"; exit 0 ;;
+  --hosts)   [[ -n $HOSTS ]] && printf '%s\n' "$HOSTS"; exit 0 ;;
+  --list)    list_sessions; list_remote; exit 0 ;;
+  --preview) shift; render_preview "$@"; exit 0 ;;
+  --kill)    shift; kill_target "$@"; exit 0 ;;
   -V|--version) echo "tj $VERSION"; exit 0 ;;
   -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$self"; exit 0 ;;
 esac
+
+# `tj prod:api` — ':' cannot occur in a tmux session name (tmux rewrites it to
+# '_'), so a colon unambiguously means "remote". It is decided BEFORE the "no
+# local server" fallback below: connecting to a remote session from a bare
+# terminal with no local tmux running is exactly what this form is for, and the
+# fallback would otherwise create a *local* session named `prod_api`.
+if [[ ${1:-} == *:* ]]; then
+  enter_remote "${1%%:*}" "${1#*:}"
+  exit 0
+fi
 
 tmux has-session 2>/dev/null || {
   # Nothing running at all: just start something.
   create_session "${1:-main}"; exit $?
 }
 
-# Direct jump: `tj api-gateway`
+# Direct jump: `tj api-gateway`. Only the first word is looked at, so `tj a b`
+# is a fuzzy jump to `a`: a host is never assembled out of two arguments, it
+# only ever arrives glued on as `host:name`. Note what that does and does not
+# promise. The `host:name` branch above deliberately does NOT consult HOSTS —
+# spelling a host out is instruction enough, and `tj prod:api` works before
+# prod is ever added to the config — so "no hosts configured means no ssh"
+# describes the list and the picker, the paths that choose hosts on their own.
 if [[ -n ${1:-} ]]; then
   match=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -i -- "$1" | head -1)
   [[ -n $match ]] && { enter_session "$match"; exit 0; }
@@ -128,7 +382,18 @@ fi
 
 command -v fzf >/dev/null || die "fzf is not installed (sudo apt install fzf)"
 
-out=$(list_sessions | fzf \
+# fzf's {n} counts fields in the ANSI-stripped row, the same row the final awk
+# reads, so both placeholders come from the computed indices above rather than
+# from literals that merely happen to agree with them today.
+if [[ -n $HOSTS ]]; then
+  preview_cmd="\"$self\" --preview {$HOSTF} {$NAMEF}"
+  kill_cmd="\"$self\" --kill {$HOSTF} {$NAMEF}"
+else
+  preview_cmd="\"$self\" --preview {$NAMEF}"
+  kill_cmd="\"$self\" --kill {$NAMEF}"
+fi
+
+out=$( { list_sessions; list_remote; } | fzf \
   --ansi \
   --reverse \
   --no-sort \
@@ -136,10 +401,10 @@ out=$(list_sessions | fzf \
   --expect=ctrl-n \
   --prompt='session > ' \
   --header=$'enter switch · ctrl-x kill · ctrl-n new · ctrl-/ preview' \
-  --preview="\"$self\" --preview {2}" \
+  --preview="$preview_cmd" \
   --preview-window='right,50%,wrap,border-left' \
   --bind='ctrl-/:toggle-preview' \
-  --bind="ctrl-x:execute-silent(tmux kill-session -t {2})+reload(\"$self\" --list)")
+  --bind="ctrl-x:execute-silent($kill_cmd)+reload(\"$self\" --list)")
 
 query=$(sed -n 1p <<<"$out")
 key=$(sed -n 2p <<<"$out")
@@ -152,4 +417,17 @@ if [[ $key == ctrl-n ]]; then
 fi
 
 [[ -z $line ]] && exit 0
-enter_session "$(awk '{print $2}' <<<"$line")"
+sel_name=$(awk -v f="$NAMEF" '{print $f}' <<<"$line")
+[[ -z $sel_name ]] && exit 0
+# '-' is the name both inert rows carry: an unreachable host, and a remote
+# session whose name contains whitespace. Neither can be entered, and the spec
+# asks enter to fail with a message rather than attempt a connection.
+[[ $sel_name == - ]] && die "that row is a placeholder, not a session"
+if [[ -n $HOSTS ]]; then
+  sel_host=$(awk -v f="$HOSTF" '{print $f}' <<<"$line")
+  if [[ $sel_host != local ]]; then
+    enter_remote "$sel_host" "$sel_name"
+    exit 0
+  fi
+fi
+enter_session "$sel_name"

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Test double for ssh: runs the command against a second throwaway tmux server
+# instead of reaching a host, so remote behaviour is exercised with no network.
+# A host listed in TJ_FAKE_SSH_DEAD exits 255, which is what real ssh returns
+# when it cannot connect at all.
+set -u
+
+[[ -n ${TJ_SSH_LOG:-} ]] && printf '%s\n' "$*" >>"$TJ_SSH_LOG"
+
+host=""
+cmd=()
+while (( $# )); do
+  if [[ -n $host ]]; then
+    cmd+=("$1"); shift; continue
+  fi
+  case $1 in
+    -o|-l|-p|-i|-F|-b|-c|-E|-D|-L|-R) shift 2 ;;
+    -*) shift ;;
+    *)  host=$1; shift ;;
+  esac
+done
+
+case " ${TJ_FAKE_SSH_DEAD:-} " in
+  *" $host "*) exit 255 ;;
+esac
+
+# A cooperative host is only one kind of host. With TJ_FAKE_SSH_OUTPUT set the
+# shim never runs the relay: it prints that string verbatim and exits 0, which
+# is the only way the suite can play a compromised, spoofed or simply
+# wrapper-wearing host — one whose `tmux list-sessions` puts arbitrary bytes in
+# every field of a row. The relay double cannot do this by construction: a real
+# tmux only ever emits well-formed rows.
+if [[ -n ${TJ_FAKE_SSH_OUTPUT:-} ]]; then
+  printf '%s\n' "$TJ_FAKE_SSH_OUTPUT"
+  exit 0
+fi
+
+(( ${#cmd[@]} )) || exit 0
+# The command always begins with `tmux`, which resolves back to the fake tmux
+# above; pointing TJ_TEST_SOCKET at the remote server is what makes it "remote".
+# Real ssh does no escaping when it re-joins argv into the remote command: a
+# double that escapes better than that would hide quoting bugs instead of
+# catching them, so this stays a bare space-join on purpose.
+exec env TJ_TEST_SOCKET="${TJ_FAKE_SSH_REMOTE_SOCKET:?}" bash -c "${cmd[*]}"

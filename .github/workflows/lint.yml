@@ -14,3 +14,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Lint
         run: shellcheck --shell=bash tj tj.tmux
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tmux and fzf
+        # The suite drives a live fzf UI, and tj refuses to run without fzf.
+        # GitHub's Ubuntu runner image ships neither.
+        run: sudo apt-get update && sudo apt-get install -y tmux fzf
+      - name: Test
+        run: tests/run.sh

@@ -25,8 +25,13 @@ remote tmux *inside* the local one (which forces a doubled prefix on every remot
 keystroke), tj hands the terminal over:
 
 ```bash
-tmux detach-client -E "ssh -t <host> tmux attach -t <name>; tmux attach -t <back>"
+tmux detach-client -E "ssh -t <host> <one qq-quoted remote command>; tmux attach -t <back>"
 ```
+
+The remote command is a single quoted string rather than bare words: ssh re-joins
+everything after the host with plain spaces before the remote shell sees it, so
+bare words would split a session name containing a space and execute one
+containing `;`.
 
 `man tmux`, `detach-client`: *"With -E, run shell-command to replace the client."*
 The local server keeps running with its sessions intact; only this client leaves.
@@ -153,8 +158,11 @@ machine), which keeps the control socket path under the unix-socket length limit
 `BatchMode=yes` means a host needing a password simply reports as unreachable rather
 than hanging the picker. This is the documented cost of remote listing.
 
-**Entering a session** (interactive): plain `ssh -t`, no `BatchMode`, so password and
-2FA prompts still work. An existing control master is reused if one is up.
+**Entering a session** (interactive): plain `ssh -t` with none of the listing
+options — no `BatchMode`, so password and 2FA prompts still work, and no
+`ControlPath`, so it never joins the listing connection's control master and
+authenticates on its own. That is deliberate: the interactive attach is the one
+place a prompt has to reach the terminal.
 
 ## Behaviour of each key
 

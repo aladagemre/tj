@@ -74,9 +74,10 @@ Reload with `tmux source-file ~/.tmux.conf`.
 ## Usage
 
 ```
-tj              open the picker
-tj <name>       jump straight to a session (fuzzy; creates it if there's no match)
-tj --help       key reference
+tj                open the picker
+tj <name>         jump straight to a session (fuzzy; creates it if there's no match)
+tj <host>:<name>  jump straight to a session on a remote host
+tj --help         key reference
 ```
 
 Inside tmux, `prefix + j` opens the picker in a popup. Outside tmux it attaches
@@ -90,6 +91,45 @@ instead of switching, so the same command works from a fresh terminal.
 | ctrl-n | create a new session named after your query |
 | ctrl-/ | toggle the preview pane                     |
 | esc    | quit                                        |
+
+## Remote sessions
+
+List and enter tmux sessions on other machines alongside your own. Put one host
+per line in `~/.config/tj/hosts`:
+
+```
+prod
+dev
+user@build.example.com
+```
+
+Entries are passed straight to `ssh`, so `~/.ssh/config` aliases work. `TJ_HOSTS="prod dev"` overrides the file.
+
+Remote sessions appear below your local ones with the host in its own column.
+Picking one hands your terminal to the remote tmux rather than nesting one tmux
+inside another, so your prefix key keeps working normally; detaching there
+(`prefix + d`) brings you back to the session you left.
+
+A few things worth knowing:
+
+- Listing uses `ssh -o BatchMode=yes`, so it needs key-based auth. A host that
+  would prompt for a password shows as unreachable. Entering a session uses a
+  normal `ssh -t`, so passwords and 2FA still work there.
+- `local` is reserved as the label for this machine and cannot name a host, and
+  a host goes on a line of its own — a line with a space in it is an error, not
+  two hosts.
+- A remote session whose name contains a space is listed but not selectable. The
+  list is a whitespace-separated table, so picking such a row would act on the
+  wrong session.
+
+With no hosts configured the list and the picker run no `ssh` at all and behave
+exactly as they always have. Naming a host yourself is the exception and always
+was: `tj prod:api` connects whether or not `prod` is in the config, since asking
+for a host by name is instruction enough.
+
+One compatibility note if you are upgrading: `tj foo:bar` used to create a
+*local* session called `foo_bar`, because tmux rewrites `:` in a session name.
+It now tries to reach session `bar` on host `foo`.
 
 ## How it works
 

@@ -15,7 +15,7 @@
 - `shellcheck --shell=bash tj tj.tmux` must stay clean; CI runs exactly that.
 - macOS is a primary target. Any new coreutils usage needs a BSD fallback, following the existing `fmt_date` and `$self` patterns.
 - With no hosts configured, `./tj --list` output must be **byte-identical** to today's and **no `ssh` process may be spawned**.
-- The list line is a contract: field 1 is the status mark and is never an empty string. The session name lives in field 2 (local-only mode) or field 3 (remote mode); that index is a computed variable, never a hard-coded literal.
+- The list line is a contract: field 1 is the status mark and is never an empty string. The session name lives in field 2 (local-only mode) or field 3 (remote mode); that index is a computed variable, never a hard-coded literal. **Field indices are indices into the ANSI-stripped row** — the raw row splits differently, because `%6s` left-pads the age and leaves its colour escape standing as a field of its own. Everything in production reads the name through fzf, which strips ANSI both when expanding `{n}` and when printing the selected line, so production sees the stripped row; tests must strip it themselves to assert on the same thing.
 - **Test isolation is `-L <socket>` on every single tmux invocation.** `TMUX_TMPDIR` does not isolate: with a server already running, a client still finds the default socket. Nothing in this repo may run a destructive tmux command against the default server.
 - No new files under `tests/` may be executable-but-unreferenced; `tests/run.sh` is the only entry point.
 
@@ -68,13 +68,20 @@ set -u
 
 [[ -n ${TJ_SSH_LOG:-} ]] && printf '%s\n' "$*" >>"$TJ_SSH_LOG"
 
+# Real ssh takes its options BEFORE the host; everything after the host is the
+# remote command and is passed through untouched. Parsing options past the host
+# would eat flags belonging to that command — `tmux attach -t api` would lose
+# its `-t` and become invalid.
 host=""
 cmd=()
 while (( $# )); do
+  if [[ -n $host ]]; then
+    cmd+=("$1"); shift; continue
+  fi
   case $1 in
     -o|-l|-p|-i|-F|-b|-c|-E|-D|-L|-R) shift 2 ;;
     -*) shift ;;
-    *)  if [[ -z $host ]]; then host=$1; else cmd+=("$1"); fi; shift ;;
+    *)  host=$1; shift ;;
   esac
 done
 
@@ -317,9 +324,21 @@ column uses for this machine."
 
 Append to `tests/run.sh`:
 
+First add this helper next to `is()` near the top of `tests/run.sh`:
+
+```bash
+# fzf strips ANSI before expanding {n} and before printing the selected line, so
+# every field index in tj is an index into the *stripped* row. Raw output splits
+# differently: `%6s` left-pads the age, so its colour escape lands in a field of
+# its own. Assert on what fzf actually hands back.
+plain() { sed "s/$(printf '\033')\[[0-9;]*m//g"; }
+```
+
+Then append the test block:
+
 ```bash
 echo "host column"
-loc=$(TJ_HOSTS= "$TJ" --list)
+loc=$(TJ_HOSTS= "$TJ" --list | plain)
 is "local-only rows have 5 fields" \
    "0" \
    "$(awk 'NF!=5{c++} END{print c+0}' <<<"$loc")"
@@ -327,7 +346,7 @@ is "local-only puts the name in field 2" \
    "alpha" \
    "$(awk '$2=="alpha"{print $2}' <<<"$loc" | head -1)"
 
-rem=$(TJ_HOSTS=nowhere TJ_FAKE_SSH_DEAD=nowhere "$TJ" --list)
+rem=$(TJ_HOSTS=nowhere TJ_FAKE_SSH_DEAD=nowhere "$TJ" --list | plain)
 is "remote mode labels local rows 'local'" \
    "2" \
    "$(awk '$2=="local"{c++} END{print c+0}' <<<"$rem")"
@@ -373,11 +392,25 @@ Then replace the `printf` at the end of the `while` loop inside `list_sessions` 
 
 - [ ] **Step 4: Run the tests and confirm today's output is unchanged**
 
+The comparison runs against the test socket, not the real server: two live
+captures of real sessions differ whenever an age ticks over between them, which
+would make the check flap for reasons that have nothing to do with the change.
+
 ```bash
 tests/run.sh
+
+S=tjtest-diff-$$
+export TJ_REAL_TMUX; TJ_REAL_TMUX=$(command -v tmux)
+export TJ_TEST_SOCKET=$S
+export PATH="$PWD/tests/fakebin:$PATH"
+"$TJ_REAL_TMUX" -L "$S" -f /dev/null new-session -d -s alpha -c /tmp -x 120 -y 30
+"$TJ_REAL_TMUX" -L "$S" -f /dev/null new-session -d -s beta  -c /tmp -x 120 -y 30
+
 git stash && TJ_HOSTS= ./tj --list > /tmp/tj-before.txt; git stash pop
 TJ_HOSTS= ./tj --list > /tmp/tj-after.txt
 diff /tmp/tj-before.txt /tmp/tj-after.txt && echo "IDENTICAL"
+
+"$TJ_REAL_TMUX" -L "$S" kill-server
 shellcheck --shell=bash tj tj.tmux
 ```
 
@@ -417,7 +450,7 @@ export TJ_SSH_LOG; TJ_SSH_LOG=$(mktemp)
 TJ_HOSTS= "$TJ" --list >/dev/null
 is "local-only mode spawns no ssh" "0" "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
 
-rows=$(TJ_HOSTS=prod "$TJ" --list)
+rows=$(TJ_HOSTS=prod "$TJ" --list | plain)
 is "remote sessions appear" \
    "1" \
    "$(awk '$2=="prod" && $3=="api"{c++} END{print c+0}' <<<"$rows")"
@@ -428,7 +461,7 @@ is "every remote-mode row has 6 fields or more" \
    "0" \
    "$(awk 'NF<6{c++} END{print c+0}' <<<"$rows")"
 
-dead=$(TJ_HOSTS=gone TJ_FAKE_SSH_DEAD=gone "$TJ" --list)
+dead=$(TJ_HOSTS=gone TJ_FAKE_SSH_DEAD=gone "$TJ" --list | plain)
 is "an unreachable host gets a visible row" \
    "1" \
    "$(awk '$2=="gone" && $3=="-"{c++} END{print c+0}' <<<"$dead")"
@@ -564,21 +597,43 @@ nothing."
 
 Append to `tests/run.sh`:
 
+First add this helper next to `is()` near the top of `tests/run.sh`:
+
+```bash
+# A pane holds the typed command, the shell's echo of it, and its output, so a
+# marker appears several times, not once. These assertions care whether the
+# preview reached the right machine — presence, never a count.
+has() { grep -q "$1" && echo yes || echo no; }
+```
+
+Then append the test block:
+
 ```bash
 echo "preview"
 srv "$LOCAL_SOCK"  send-keys -t alpha 'echo LOCALMARK' Enter
 srv "$REMOTE_SOCK" send-keys -t api   'echo REMOTEMARK' Enter
+
+# A local session deliberately COLLIDING by name with the remote one. Without
+# it the negative assertion below proves nothing: a remote branch that wrongly
+# fell through to local would look for `api` on the local socket, find nothing,
+# print nothing, and satisfy "no LOCALMARK" vacuously. With the collision, that
+# same bug renders the local pane and the assertion catches it.
+srv "$LOCAL_SOCK" -f /dev/null new-session -d -s api -c /tmp -x 120 -y 30
+srv "$LOCAL_SOCK" send-keys -t api 'echo LOCALMARK' Enter
 sleep 1
 
 is "one argument previews a local session" \
-   "1" \
-   "$(TJ_HOSTS=prod "$TJ" --preview alpha | grep -c LOCALMARK)"
+   "yes" \
+   "$(TJ_HOSTS=prod "$TJ" --preview alpha | has LOCALMARK)"
 is "'local' as host previews locally" \
-   "1" \
-   "$(TJ_HOSTS=prod "$TJ" --preview local alpha | grep -c LOCALMARK)"
+   "yes" \
+   "$(TJ_HOSTS=prod "$TJ" --preview local alpha | has LOCALMARK)"
 is "two arguments preview over ssh" \
-   "1" \
-   "$(TJ_HOSTS=prod "$TJ" --preview prod api | grep -c REMOTEMARK)"
+   "yes" \
+   "$(TJ_HOSTS=prod "$TJ" --preview prod api | has REMOTEMARK)"
+is "the remote preview shows the remote pane, not the local one" \
+   "no" \
+   "$(TJ_HOSTS=prod "$TJ" --preview prod api | has LOCALMARK)"
 is "a placeholder name previews nothing" \
    "" \
    "$(TJ_HOSTS=prod "$TJ" --preview gone -)"
@@ -678,8 +733,14 @@ is "killing a local session works" \
    "0" \
    "$(srv "$LOCAL_SOCK" list-sessions -F '#{session_name}' | grep -c '^doomed$')"
 
+# The entrypoint ends in `exit 0` unconditionally, so asserting on the exit
+# status here would pass even with the placeholder guard deleted. What actually
+# distinguishes a no-op is that no connection was opened, so assert on that.
+: >"$TJ_SSH_LOG"
 TJ_HOSTS=prod "$TJ" --kill gone -
-is "killing a placeholder row is a silent no-op" "0" "$?"
+is "killing a placeholder row opens no connection" \
+   "0" \
+   "$(wc -l <"$TJ_SSH_LOG" | tr -d ' ')"
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -751,6 +812,43 @@ function always exits 0 so the picker's reload never looks broken."
 - Consumes: `qq`.
 - Produces: `enter_remote <host> <name>` — inside tmux it replaces the client via `detach-client -E`; outside it `exec`s `ssh -t`.
 
+- [ ] **Step 0: Repair the ssh shim's argument parsing**
+
+`tests/fakebin/ssh` strips every `-*` token anywhere in argv, including flags
+that belong to the *remote command*. `ssh -t prod tmux attach -t api` therefore
+reaches the fake remote server as `tmux attach api`, which is invalid. Real ssh
+stops option parsing at the host. Replace the parsing loop in
+`tests/fakebin/ssh` with the corrected version shown in Task 1's Step 2 above
+(options before the host only; everything after the host is the command).
+
+Change nothing else in the shim. In particular it must keep joining the remote
+command the way real ssh does — a naive space concatenation with no escaping.
+A double that escapes better than the real thing hides quoting bugs instead of
+catching them.
+
+Then add this guard next to the existing ssh-shim assertions in `tests/run.sh`.
+It probes the risk that actually matters, in the form `tj` really emits: a
+session name carrying a shell metacharacter must cross the hop as data, never
+as a second command.
+
+```bash
+: >"$TJ_SSH_LOG"
+rm -f /tmp/tj-injected
+( unset TMUX; TJ_HOSTS=prod "$TJ" prod 'a;touch /tmp/tj-injected' ) >/dev/null 2>&1
+is "a metacharacter in a session name cannot become a second remote command" \
+   "no" \
+   "$([[ -e /tmp/tj-injected ]] && echo yes || echo no)"
+rm -f /tmp/tj-injected
+```
+
+With a bare-words invocation this fails: the remote shell sees
+`tmux attach -t a;touch /tmp/tj-injected`, runs the `touch`, and the file
+appears. With the remote command sent as one quoted string, tmux receives the
+literal name `a;touch /tmp/tj-injected` and nothing else runs.
+
+This assertion depends on Step 4's two-argument acceptance, so run it after
+that step rather than before.
+
 - [ ] **Step 1: Write the failing test**
 
 This is the one test needing a real attached client, because `detach-client` has nothing to act on without one. Append to `tests/run.sh`:
@@ -768,6 +866,12 @@ srv "$LOCAL_SOCK" set-environment -g TJ_FAKE_SSH_REMOTE_SOCKET "$REMOTE_SOCK"
 nohup script -qc "$TJ_REAL_TMUX -L $LOCAL_SOCK attach -t home" /dev/null >/dev/null 2>&1 &
 sleep 1
 tty_before=$(srv "$LOCAL_SOCK" list-clients -F '#{client_tty}' | head -1)
+# Without a real client there is nothing for detach-client to move, and every
+# assertion below would pass against an empty client list. Fail loudly here
+# instead of reporting three vacuous successes.
+is "a client is attached before the transition" \
+   "yes" \
+   "$([[ -n $tty_before ]] && echo yes || echo no)"
 
 srv "$LOCAL_SOCK" send-keys -t home \
   "TJ_HOSTS=prod TJ_TEST_SOCKET=$LOCAL_SOCK TJ_REAL_TMUX=$TJ_REAL_TMUX PATH=$ROOT/tests/fakebin:\$PATH TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK $TJ prod api" Enter
@@ -786,7 +890,10 @@ is "ending the remote session returns the terminal home" \
    "1" \
    "$(srv "$LOCAL_SOCK" list-clients -F '#{client_session}' | grep -c '^home$')"
 
+# T8 previews this session and greps for the marker, so restore it.
 srv "$REMOTE_SOCK" -f /dev/null new-session -d -s api -c /tmp -x 120 -y 30
+srv "$REMOTE_SOCK" send-keys -t api 'echo REMOTEMARK' Enter
+sleep 1
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -809,12 +916,17 @@ In `tj`, after `enter_session`:
 # the session it came from.
 enter_remote() {
   local host=$1 name=$2 back
+  # ssh does not preserve argument boundaries: it re-joins everything after the
+  # host with plain spaces and hands the result to the remote shell. So the
+  # remote command must arrive as ONE already-quoted string, the way ssh_q
+  # sends its own. Bare words would let a session name containing a space split
+  # in two, and one containing `;` run as a second command on the remote host.
   if [[ -n ${TMUX:-} ]]; then
     back=$(tmux display-message -p '#S')
     tmux detach-client -E \
-      "ssh -t $(qq "$host") tmux attach -t $(qq "$name"); tmux attach -t $(qq "$back")"
+      "ssh -t $(qq "$host") $(qq "tmux attach -t $(qq "$name")"); tmux attach -t $(qq "$back")"
   else
-    exec ssh -t "$host" tmux attach -t "$name"
+    exec ssh -t "$host" "tmux attach -t $(qq "$name")"
   fi
 }
 ```
@@ -874,22 +986,24 @@ Append to `tests/run.sh`:
 echo "picker wiring"
 srv "$REMOTE_SOCK" -f /dev/null new-session -d -s solo -c /tmp -x 120 -y 30
 : >"$TJ_SSH_LOG"
-( TJ_HOSTS=prod "$TJ" prod:solo ) >/dev/null 2>&1
+# unset TMUX: this asserts the outside-tmux path, and inheriting a real $TMUX
+# would silently exercise the detach-client branch instead.
+( unset TMUX; TJ_HOSTS=prod "$TJ" prod:solo ) >/dev/null 2>&1
 is "host:name asks ssh for that host and session" \
    "1" \
    "$(grep -c 'prod.*tmux attach -t solo' "$TJ_SSH_LOG")"
 
 # Feed the picker's own placeholders back through the entrypoints, which is what
 # fzf does with {2} and {3}.
-line=$(TJ_HOSTS=prod "$TJ" --list | awk '$2=="prod" && $3=="api"' | head -1)
+line=$(TJ_HOSTS=prod "$TJ" --list | plain | awk '$2=="prod" && $3=="api"' | head -1)
 is "remote-mode {2} {3} reach the remote pane" \
-   "1" \
-   "$(TJ_HOSTS=prod "$TJ" --preview "$(awk '{print $2}' <<<"$line")" "$(awk '{print $3}' <<<"$line")" | grep -c REMOTEMARK)"
+   "yes" \
+   "$(TJ_HOSTS=prod "$TJ" --preview "$(awk '{print $2}' <<<"$line")" "$(awk '{print $3}' <<<"$line")" | has REMOTEMARK)"
 
-line=$(TJ_HOSTS= "$TJ" --list | awk '$2=="alpha"' | head -1)
+line=$(TJ_HOSTS= "$TJ" --list | plain | awk '$2=="alpha"' | head -1)
 is "local-mode {2} reaches the local pane" \
-   "1" \
-   "$(TJ_HOSTS= "$TJ" --preview "$(awk '{print $2}' <<<"$line")" | grep -c LOCALMARK)"
+   "yes" \
+   "$(TJ_HOSTS= "$TJ" --preview "$(awk '{print $2}' <<<"$line")" | has LOCALMARK)"
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1062,7 +1176,11 @@ that index is computed once into `NAMEF` at startup; nothing may hard-code `{2}`
 or `$2`. The status mark in field 1 must never be an empty string — if it were,
 awk's whitespace splitting would shift every field by one and the wrong session
 would be switched to or killed. fzf strips ANSI codes both when expanding `{n}`
-and when printing the selected line, so colours anywhere in the row are safe.
+and when printing the selected line, so colours anywhere in the row are safe —
+but those field numbers count fields in the *stripped* row. The raw row splits
+differently: `%6s` left-pads the age, so its colour escape stands alone as a
+field. Anything parsing `tj --list` directly (the test suite does) must strip
+ANSI first; `tests/run.sh` has a `plain()` helper for exactly that.
 ```
 
 Then add to the same section:
@@ -1075,9 +1193,12 @@ than merged into one MRU ordering, so a slow or dead host cannot delay the
 picker.
 
 **Entering a remote session replaces the client.** `enter_remote` uses
-`tmux detach-client -E "ssh -t <host> tmux attach -t <name>; tmux attach -t <back>"`
-so exactly one tmux is ever attached to the terminal. Nesting was rejected: it
-forces a doubled prefix on every remote keystroke.
+`tmux detach-client -E` to hand the terminal to the remote tmux, chaining a
+return to the session it left, so exactly one tmux is ever attached. Nesting was
+rejected: it forces a doubled prefix on every remote keystroke. The remote
+command is built as ONE `qq`-quoted string, like `ssh_q`'s, because ssh re-joins
+its arguments with plain spaces — bare words would split a session name
+containing a space and execute one containing `;`.
 ```
 
 Replace the **Testing changes** section's body with:
@@ -1108,8 +1229,10 @@ In `.github/workflows/lint.yml`, add a second job:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Install tmux and fzf
+        # The suite drives a live fzf UI, and tj refuses to run without fzf.
+        # GitHub's Ubuntu runner image ships neither.
+        run: sudo apt-get update && sudo apt-get install -y tmux fzf
       - name: Test
         run: tests/run.sh
 ```
