@@ -49,6 +49,12 @@ end you need a real client attached (`switch-client` and `detach-client` fail
 with none), so background one with
 `nohup script -qc "tmux -L <sock> attach -t demo" /dev/null &`.
 
+**CI runners supply `TERM=dumb` (or unset), and tmux refuses to attach a
+client under it** (`open terminal failed: terminal does not support clear`) —
+every assertion downstream of that attach then fails. `tests/run.sh` pins
+`TERM=xterm-256color` for exactly this reason. `TERM=dumb tests/run.sh`
+reproduces the CI-only failure locally if this ever regresses.
+
 **The suite is Linux-only, even though `tj` is not.** It uses GNU spellings that
 BSD/macOS does not share — `mktemp -d <template>` and `script -qc <cmd> <file>`
 — and CI runs it on Linux. The portability rules in Architecture below govern

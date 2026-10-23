@@ -11,6 +11,14 @@ TJ_REAL_TMUX=$(command -v tmux) || { echo "tmux not on PATH"; exit 1; }
 export TJ_REAL_TMUX
 export PATH="$ROOT/tests/fakebin:$PATH"
 
+# tmux refuses to attach a client when TERM is "dumb" or unset ("open terminal
+# failed: terminal does not support clear") — exactly what CI runners (e.g.
+# GitHub Actions) provide, and nothing else. The suite attaches its own client
+# through `script`, which allocates a fresh pty anyway, so the host's TERM has
+# nothing to do with what's under test — pin one tmux accepts, same reasoning
+# as pinning XDG_CONFIG_HOME above for the host's config.
+export TERM=xterm-256color
+
 LOCAL_SOCK=tjtest-local-$$
 REMOTE_SOCK=tjtest-remote-$$
 export TJ_FAKE_SSH_REMOTE_SOCKET=$REMOTE_SOCK
