@@ -7,19 +7,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `tj` is a tmux session picker: it lists tmux sessions — on this machine and, if you've
 configured any, on remote hosts over `ssh` — ordered by when you last attached, filters
 them through `fzf`, and previews each session's live pane. The whole tool is one bash
-script (`tj`, 433 lines). `tj.tmux` is a separate 23-line entry point that only exists
+script (`tj`, 471 lines). `tj.tmux` is a separate 23-line entry point that only exists
 so the repo can be installed as a TPM (tmux plugin manager) plugin — it reads
 `@tj-key` / `@tj-width` / `@tj-height` and creates the key binding.
 
 There is no build step, and no dependencies beyond `tmux` and `fzf` — plus `ssh`, but
-only if you configure remote hosts. There is a 69-assertion test suite
+only if you configure remote hosts. There is an 81-assertion test suite
 (`tests/run.sh`); see Testing changes below.
 
 ## Commands
 
 ```sh
 shellcheck --shell=bash tj tj.tmux     # style/lint check; CI runs this
-tests/run.sh                           # the 69-assertion suite; CI runs this too
+tests/run.sh                           # the 81-assertion suite; CI runs this too
 ./tj --list                            # print the formatted session list (no UI)
 ./tj --preview <session>               # render the preview pane, local
 ./tj --preview <host> <name>           # ...for a session on a configured remote host
@@ -76,7 +76,10 @@ the host, when there is one, in field 2; both indices are computed once into
 and the final `awk` all read them — nothing may hard-code `{2}` or `$2`.
 The status mark in field 1 must never be an empty string — if it were,
 awk's whitespace splitting would shift every field by one and the wrong session
-would be switched to or killed. fzf strips ANSI codes both when expanding `{n}`
+would be switched to or killed. It is always exactly one mark: local rows use
+`◆` (flagged, see Ordering), `●` (current), `○` (attached elsewhere) or `·`, in
+that order of precedence, so a flagged current session shows `◆` alone, never
+two marks. fzf strips ANSI codes both when expanding `{n}`
 and when printing the selected line, so colours anywhere in the row are safe —
 but those field numbers count fields in the *stripped* row. The raw row splits
 differently: `%6s` left-pads the age, so its colour escape stands alone as a
@@ -120,6 +123,21 @@ print a canned row, which is the only way the suite can play a hostile host.
 
 **Ordering** comes from tmux itself: `session_last_attached`, falling back to
 `session_created` for sessions never attached, sorted descending. Nothing is cached.
+One thing outranks recency: a session with at least one pane whose user option
+`@tj-attention` is non-empty is "flagged" — marked `◆` and listed ahead of every
+unflagged session, each group keeping MRU order. Any program can set it
+(`tmux set -p -t "$TMUX_PANE" @tj-attention <reason>`; the README shows Claude
+Code hooks that do). `list_sessions` reads it with ONE extra call,
+`list-panes -a -F '#{session_name}|#{@tj-attention}'`, because the flag is per
+pane and a list-sessions format would only see each session's active pane. The
+order comes from decorate-sort-undecorate: a `1|`/`0|` prefix is the first key
+of `sort -t'|' -rn -k1,1 -k2,2`. Keep the global `-rn`: with nothing flagged
+every line gets the same `0|`, so the timestamp key and sort's last-resort
+whole-line tie-break see exactly what the old `sort -rn -k1,1` saw, and the
+output is byte-identical to the pre-flag list — the suite pins that with an MRU
+oracle. The flag is **local only**: a remote row's flag would be one more field
+the remote host chooses (see the untrusted-input rule above), so remote rows
+never read it, and a test asserts a flagged remote pane leaves its row alone.
 
 **Inside vs outside tmux** is the one behavioural fork: `enter_session` uses
 `switch-client` when `$TMUX` is set and `attach-session` otherwise, which is what lets
