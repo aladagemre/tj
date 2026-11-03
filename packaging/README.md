@@ -18,9 +18,9 @@ cd aur-tj
 # fill in the Maintainer line first
 makepkg --printsrcinfo > .SRCINFO
 git add PKGBUILD .SRCINFO
-git commit -m "Initial import: tj-tmux 0.1.0"
+git commit -m "Initial import: tj-tmux 0.2.0"
 git push
 ```
 
-The `sha256sums` entry matches the v0.1.0 source tarball; regenerate it with
+The `sha256sums` entry matches the v0.2.0 source tarball; regenerate it with
 `makepkg -g` after each release.
