@@ -172,16 +172,54 @@ emit_row() {
 
 # Sessions, most recently attached first. Never-attached ones fall back to
 # their creation time so they still land somewhere sensible.
+#
+# A session that has asked for you jumps that queue. Any program can set the
+# pane option @tj-attention (a non-empty value, a short reason — see the
+# README), and every session with at least one such pane is listed first and
+# marked ◆. The picker runs with --reverse, so the first of them is the row fzf
+# highlights on open, and a bare `enter` goes straight to it. Local sessions
+# only: on a remote row the flag would be one more field the remote host
+# chooses, and remote_rows trusts none of those.
 list_sessions() {
-  local current="" ts name wins att path age mark home_short
+  local current="" flagged line row flag ts name wins att path age mark home_short
   [[ -n ${TMUX:-} ]] && current=$(tmux display-message -p '#S' 2>/dev/null)
 
+  # The flag lives on the PANE, because one session can hold several programs
+  # that each want you, and only list-panes -a sees every pane: in a
+  # list-sessions format #{@tj-attention} resolves against the active pane
+  # alone. One call, however many sessions. Each line is split at its FIRST '|'
+  # by hand, since `read` would trim a trailing '|' off the reason and a reason
+  # of just '|' would come out empty. The names end up newline-framed for the
+  # same *$'\n'name$'\n'* test the reserved-host check uses: bash 3.2, which is
+  # what macOS still ships, has no associative arrays.
+  flagged=$(tmux list-panes -a -F '#{session_name}|#{@tj-attention}' 2>/dev/null |
+    while IFS= read -r line; do
+      [[ -n ${line#*|} ]] && printf '%s\n' "${line%%|*}"
+    done)
+  flagged=$'\n'$flagged$'\n'
+
+  # Decorate, sort, undecorate. A 1|/0| prefix is the first sort key and the
+  # timestamp the second, so flagged sessions lead and each group keeps MRU
+  # order. With nothing flagged every line gains the same 0|, the first key
+  # ties everywhere, and the rest — the timestamp, then sort's last-resort
+  # whole-line comparison that breaks timestamp ties — sees what the bare
+  # `sort -rn -k1,1` always saw behind an identical prefix: the order does not
+  # move.
   tmux list-sessions \
     -F '#{?session_last_attached,#{session_last_attached},#{session_created}}|#{session_name}|#{session_windows}|#{?session_attached,1,0}|#{session_path}' \
-    2>/dev/null | sort -t'|' -rn -k1,1 |
-  while IFS='|' read -r ts name wins att path; do
+    2>/dev/null |
+  while IFS= read -r row; do
+    name=${row#*|}; name=${name%%|*}
+    if [[ $flagged == *$'\n'"$name"$'\n'* ]]; then printf '1|%s\n' "$row"
+    else                                            printf '0|%s\n' "$row"
+    fi
+  done | sort -t'|' -rn -k1,1 -k2,2 |
+  while IFS='|' read -r flag ts name wins att path; do
     age=$(human_age "$ts")
-    if   [[ $name == "$current" ]]; then mark=$'\033[32m●\033[0m'
+    # ◆ wins over ●/○/·: a session waiting on you matters more than which one
+    # you are in. Field 1 holds exactly one mark, so it cannot carry both.
+    if   [[ $flag == 1 ]];          then mark=$'\033[38;5;208m◆\033[0m'
+    elif [[ $name == "$current" ]]; then mark=$'\033[32m●\033[0m'
     elif [[ $att == 1 ]];           then mark=$'\033[33m○\033[0m'
     else                                 mark=$'\033[38;5;240m·\033[0m'
     fi

@@ -272,6 +272,101 @@ is "remote mode puts the name in field 3" \
    "alpha" \
    "$(awk '$2=="local" && $3=="alpha"{print $3}' <<<"$rem" | head -1)"
 
+echo "attention flag"
+
+# Any program can mark a tmux PANE with the user option @tj-attention, and a
+# non-empty value means "this pane needs you". tj lifts that to the session: a
+# session with at least one flagged pane is drawn with ◆ and listed ahead of the
+# rest. What can break is the order, the mark and the row's field contract —
+# and, just as much, the list nobody flagged anything in, which has to come out
+# exactly as it did before the flag existed.
+#
+# The oracle for "MRU order" is tmux plus tj's long-standing sort: the same
+# format, the same flags. These sessions are created within a second or two of
+# each other, so timestamp ties are likely, and sort's tie-break is part of what
+# is being compared rather than noise to filter out.
+mru() {
+  srv "$LOCAL_SOCK" list-sessions \
+    -F '#{?session_last_attached,#{session_last_attached},#{session_created}}|#{session_name}|#{session_windows}|#{?session_attached,1,0}|#{session_path}' |
+    sort -t'|' -rn -k1,1 | cut -d'|' -f2
+}
+# Mark and name of every local-only row, in order: the two things a flag may
+# change, and nothing that ticks with the clock.
+marks() { TJ_HOSTS= "$TJ" --list | plain | awk '{print $1, $2}'; }
+
+# gamma's flag goes where a lazier lookup would miss it: the second pane of its
+# second window, neither of them active. #{@tj-attention} in a list-sessions
+# format resolves against each session's ACTIVE pane only.
+srv "$LOCAL_SOCK" -f /dev/null new-session -d -s gamma -c /tmp -x 120 -y 30
+win=$(srv "$LOCAL_SOCK" new-window -d -P -F '#{window_id}' -t gamma: -c /tmp)
+hidden=$(srv "$LOCAL_SOCK" split-window -d -P -F '#{pane_id}' -t "$win" -c /tmp)
+
+base=$(marks)
+is "with nothing flagged, the list is in plain MRU order" \
+   "$(mru)" \
+   "$(awk '{print $2}' <<<"$base")"
+is "with nothing flagged, no row carries the attention mark" \
+   "0" \
+   "$(grep -c '◆' <<<"$base")"
+
+# The contract is a NON-empty value. tmux happily stores an empty one, and a
+# tool that "clears" by setting '' instead of unsetting must not leave a mark.
+srv "$LOCAL_SOCK" set -p -t alpha @tj-attention ''
+is "an empty @tj-attention flags nothing" "$base" "$(marks)"
+srv "$LOCAL_SOCK" set -p -u -t alpha @tj-attention
+
+# alpha is last in MRU order here — the oldest, or the loser of a tie-break —
+# so arriving on top is something only the flag can have done.
+srv "$LOCAL_SOCK" set -p -t alpha @tj-attention permission
+flagged=$(TJ_HOSTS= "$TJ" --list | plain)
+is "a flagged session is listed first, the rest keep MRU order" \
+   "$(echo alpha; mru | grep -vx alpha)" \
+   "$(awk '{print $2}' <<<"$flagged")"
+is "a flagged session carries the ◆ mark" \
+   "◆" \
+   "$(awk '$2=="alpha"{print $1}' <<<"$flagged")"
+is "a flagged row keeps 5 fields with the name in field 2" \
+   "1" \
+   "$(awk '$1=="◆" && $2=="alpha" && NF==5{c++} END{print c+0}' <<<"$flagged")"
+is "with a host column, a flagged row keeps 6 fields with the name in field 3" \
+   "1" \
+   "$(TJ_HOSTS=nowhere TJ_FAKE_SSH_DEAD=nowhere "$TJ" --list | plain |
+      awk '$1=="◆" && $2=="local" && $3=="alpha" && NF==6{c++} END{print c+0}')"
+
+srv "$LOCAL_SOCK" set -p -u -t alpha @tj-attention
+is "clearing the flag puts every row back in its old place with its old mark" \
+   "$base" "$(marks)"
+
+# Without this the next assertion could pass for the wrong reason: a flag on an
+# active pane is one even a list-sessions lookup would see.
+is "the hidden pane is neither the active pane nor in the active window" \
+   "00" \
+   "$(srv "$LOCAL_SOCK" display-message -p -t "$hidden" '#{pane_active}#{window_active}')"
+srv "$LOCAL_SOCK" set -p -t "$hidden" @tj-attention idle
+is "a flag on an inactive pane in an inactive window still flags its session" \
+   "◆" \
+   "$(marks | awk '$2=="gamma"{print $1}')"
+
+# Two flagged sessions lead in MRU order between themselves, and beta, the one
+# left over, follows. The expected order is the oracle's, split in two.
+srv "$LOCAL_SOCK" set -p -t alpha @tj-attention permission
+is "flagged sessions lead in MRU order, the rest follow in MRU order" \
+   "$(mru | grep -xE 'alpha|gamma'; mru | grep -vxE 'alpha|gamma')" \
+   "$(marks | awk '{print $2}')"
+
+# Remote rows are out of the flag's reach on purpose: the remote host would
+# choose that value, and a new remote field is new untrusted input (CLAUDE.md,
+# "Every field of a remote row is untrusted input"). A flag on a remote pane
+# must leave its row exactly as it was.
+srv "$REMOTE_SOCK" set -p -t api @tj-attention permission
+is "a flag on a remote pane leaves the remote row's mark alone" \
+   "·" \
+   "$(TJ_HOSTS=prod "$TJ" --list | plain | awk '$2=="prod" && $3=="api"{print $1}')"
+srv "$REMOTE_SOCK" set -p -u -t api @tj-attention
+
+srv "$LOCAL_SOCK" set -p -u -t alpha @tj-attention
+srv "$LOCAL_SOCK" kill-session -t gamma
+
 echo "remote listing"
 : >"$TJ_SSH_LOG"
 TJ_HOSTS= "$TJ" --list >/dev/null

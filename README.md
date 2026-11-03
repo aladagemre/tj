@@ -17,7 +17,8 @@ screen so you can recognise it without attaching.
 
 ![tj in action](assets/demo.gif)
 
-- `●` current session · `○` attached by another client · `·` detached
+- `●` current session · `○` attached by another client · `·` detached ·
+  `◆` [needs you](#sessions-that-need-you)
 - then: how long ago you last attached, window count, session directory
 - the right pane is a live capture of that session's active pane
 
@@ -131,12 +132,68 @@ One compatibility note if you are upgrading: `tj foo:bar` used to create a
 *local* session called `foo_bar`, because tmux rewrites `:` in a session name.
 It now tries to reach session `bar` on host `foo`.
 
+## Sessions that need you
+
+Some of what runs in your sessions stops and waits for you: a coding agent
+asking for permission, a long build that has finished. Anything that can run
+`tmux` can say so by flagging its own pane with the user option
+`@tj-attention`, set to a short reason, and unsetting it once it no longer
+needs you:
+
+```sh
+tmux set -p -t "$TMUX_PANE" @tj-attention <reason>   # needs you
+tmux set -p -u -t "$TMUX_PANE" @tj-attention          # done
+```
+
+A session with at least one flagged pane is marked `◆` and moves to the top of
+the list. Flagged sessions keep most-recently-used order among themselves, and
+so does everything below them. The picker opens with the first row highlighted,
+so `prefix + j`, `enter` takes you straight to a session that is waiting. Once
+the flag is cleared, the session goes back to its usual place.
+
+The flag sits on the pane rather than the session because one session can hold
+several programs that each want you. Only local sessions are flagged; remote
+rows look exactly as they always have.
+
+**Claude Code** can do this with hooks and no script at all. Merge this into
+`~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Notification": [{
+      "matcher": "permission_prompt|idle_prompt|elicitation_dialog",
+      "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -p -t \"$TMUX_PANE\" @tj-attention claude 2>/dev/null || true" }]
+    }],
+    "UserPromptSubmit": [{
+      "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -p -u -t \"$TMUX_PANE\" @tj-attention 2>/dev/null || true" }]
+    }],
+    "PostToolUse": [{
+      "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -p -u -t \"$TMUX_PANE\" @tj-attention 2>/dev/null || true" }]
+    }],
+    "SessionEnd": [{
+      "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -p -u -t \"$TMUX_PANE\" @tj-attention 2>/dev/null || true" }]
+    }]
+  }
+}
+```
+
+The pane is flagged when Claude shows a permission prompt or an input dialog,
+or has finished a turn and you have not answered for a while. Your next prompt,
+the next tool call (which is what follows an approved permission prompt), or
+quitting the session clears it. `PostToolUse` runs after every tool call, which
+is why the clear is one `tmux` call and nothing more. Every command checks
+`$TMUX_PANE` first, so a Claude Code running outside tmux is left alone, and
+ends in `|| true`, so a hook can never fail a session. One gap: denying a
+permission prompt fires no hook, so that flag stays until your next prompt.
+
 ## How it works
 
 Sessions are ordered by tmux's own `session_last_attached`, falling back to
-`session_created` for sessions that have never been attached. Everything else is
-`fzf`: the script re-invokes itself for `--list` (so `ctrl-x` can reload the list
-after a kill) and for `--preview`.
+`session_created` for sessions that have never been attached, with flagged
+sessions moved ahead of the rest ([above](#sessions-that-need-you)). Everything
+else is `fzf`: the script re-invokes itself for `--list` (so `ctrl-x` can reload
+the list after a kill) and for `--preview`.
 
 It is one self-contained bash script with no dependencies beyond `tmux` and
 `fzf`, and it works on both GNU and BSD/macOS userlands.
