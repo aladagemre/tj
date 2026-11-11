@@ -173,9 +173,10 @@ and is not yet published to the AUR.
 
 ## The demo GIF
 
-`assets/demo.gif` (re-recorded for v0.2.0) shows seven invented projects, each with
-a coding agent in its session. Two of them are Claude Code sessions flagged `◆`, and
-there are rows from a remote host. The recording scripts live outside the repo, so
+`assets/demo.gif` (re-recorded for v0.2.0) shows seven invented projects, one tmux
+session each. Five run a coding agent (Claude Code, Codex or OpenCode) and two are
+plain shells. Two Claude Code sessions are flagged `◆`, and there are rows from a
+remote host. The recording scripts live outside the repo, so
 this section is the spec any re-record must reproduce.
 
 - **Two throwaway servers, reached only through the test shims.**
