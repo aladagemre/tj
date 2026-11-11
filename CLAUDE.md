@@ -173,9 +173,54 @@ and is not yet published to the AUR.
 
 ## The demo GIF
 
-`assets/demo.gif` was recorded against a throwaway tmux server whose sessions were
-created under `libfaketime` with a timestamp file, so the age column shows a realistic
-spread (`now / 6m / 2h / 1d / 10 Aug`) instead of every session reading "now". Panes ran
-with `HOME` pointed at a scratch directory containing a `.profile` that sets `PS1="$ "`,
-which is what keeps the real username and hostname out of the recording. Any re-record
-must reproduce both of those or it will leak the user's identity and real project names.
+`assets/demo.gif` (re-recorded for v0.2.0) shows seven invented projects, one tmux
+session each. Five run a coding agent (Claude Code, Codex or OpenCode) and two are
+plain shells. Two Claude Code sessions are flagged `◆`, and there are rows from a
+remote host. The recording scripts live outside the repo, so
+this section is the spec any re-record must reproduce.
+
+- **Two throwaway servers, reached only through the test shims.**
+  - Every tmux call went through `tests/fakebin/tmux` with
+    `TJ_TEST_SOCKET=tjtest-demo-local`.
+  - The remote host `gpu-box` (`TJ_HOSTS=gpu-box`) is `tests/fakebin/ssh`
+    pointed at a second server, `tjtest-demo-remote`.
+  - The rules under "Testing changes" apply in full.
+- **The agent screens are scripted. Never record real agents.**
+  - Each pane runs a short bash script that prints a screen in Claude Code,
+    Codex or OpenCode style.
+  - A real `claude` would run the recorder's own hooks, show account details,
+    spend quota, and never repeat itself.
+  - Agent sessions are split. The agent sits in a 60-column pane on the left;
+    that is about tj's preview width, so the preview shows it unwrapped. The
+    project's dev server or monitor sits on the right.
+  - The scripts size their boxes with `tput cols`. A fixed-width screen parked
+    on the left of a wide pane reads as fake.
+- **`◆` only where the README backs it.**
+  - The flag was set with `tmux set -p -t <session> @tj-attention claude`, on
+    Claude Code panes only. The README documents a hook for Claude Code alone.
+  - The pane the viewer approves clears its own flag with the same command the
+    README's hook runs.
+- **Realistic ages.**
+  - Each session's creation time is pushed into the past by a tiny
+    `LD_PRELOAD` that offsets only the wall clock, re-read from a file before
+    each `new-session`.
+  - `libfaketime` did this for the first recording, but it deadlocks tmux 3.6
+    at startup.
+- **No identity.**
+  - `HOME` is a scratch directory whose `.bashrc` sets `PS1='$ '`.
+  - The status bar shows no hostname and no clock.
+  - Every project and host name is invented.
+  - The `.cast` is plain text. Before rendering it is grepped for the username,
+    the hostname, the email and real project names, and the only acceptable
+    result is zero hits.
+- **Real keystrokes, captioned.**
+  - A driver types into a pty running `asciinema rec`, so `prefix + j` opens
+    the real popup.
+  - It writes each step's caption into a tmux user option shown in
+    `status-right`. Viewers cannot see keys, so the GIF has to say which key
+    was pressed and why.
+- **Rendering.**
+  - `agg` 1.9.0 with `--theme github-dark --font-size 16 --idle-time-limit 2`,
+    on a 140×36 terminal.
+  - agg falls back to DejaVu Sans Mono here, which lacks `⏺`, `⎿` and the
+    braille spinners. The screens use `●`, `└` and `◐` instead.
