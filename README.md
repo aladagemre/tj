@@ -64,11 +64,22 @@ brew install aladagemre/tap/tj
 
 ---
 
-If you installed without TPM, bind the popup yourself in `~/.tmux.conf`:
+If you installed without TPM, bind the popup yourself in `~/.tmux.conf`. The
+path in the binding has to be where `tj` landed, so it depends on how you
+installed it:
 
 ```tmux
+# Just the file
 bind j display-popup -E -w 80% -h 75% "$HOME/.local/bin/tj"
+
+# Arch Linux (PKGBUILD)
+bind j display-popup -E -w 80% -h 75% "/usr/bin/tj"
 ```
+
+Homebrew prints the exact line for your machine at the end of `brew install`,
+and `brew info aladagemre/tap/tj` shows it again. The Homebrew prefix differs
+between Apple Silicon Macs, Intel Macs and Linux, so copy that line rather than
+guessing. If you're not sure where `tj` went, `command -v tj` prints the path.
 
 Reload with `tmux source-file ~/.tmux.conf`.
 
